@@ -2,7 +2,7 @@
 
 [← Documentation](README.md)
 
-Version 0.1.0. All five milestones of the [specification](SPECIFICATION.md) are
+Version 0.1.1. All five milestones of the [specification](SPECIFICATION.md) are
 delivered, plus the local stdio binary. This page says what has been proven against the real
 site and what has not. Nothing here is assumed: a route that was never exercised is listed
 as such. The dated, detailed record is [MILESTONES.md](MILESTONES.md) (in French).

@@ -36,7 +36,7 @@ docker compose run --rm --no-deps server keygen
 
 # 3. Start
 docker compose up -d
-curl https://<your-domain>/healthz        # {"canary":null,"status":"ok","version":"0.1.0"}
+curl https://<your-domain>/healthz        # {"canary":null,"status":"ok","version":"0.1.1"}
 ```
 
 To skip the build, use the published image, for amd64 and arm64: replace `build: .` and
