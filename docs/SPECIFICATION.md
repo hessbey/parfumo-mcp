@@ -2,6 +2,18 @@
 
 11 novembre 2026
 
+> **Document d'origine, conservé tel quel.** C'est le cahier des charges rédigé avant le
+> développement, pas un mode d'emploi. Plusieurs choses ont changé depuis :
+>
+> - le serveur HTTP s'appelle `parfumo-mcp-server`, et `parfumo-mcp` désigne aujourd'hui le
+>   programme local. Les commandes d'administration sont donc `parfumo-mcp-server user add`,
+>   `audit`, `canary`… ;
+> - un utilisateur n'a plus de nom ni de mot de passe à saisir, seulement une clé d'accès ;
+> - le code est réparti en quatre crates.
+>
+> Les commandes à utiliser sont dans [HOSTING.md](HOSTING.md) et [LOCAL.md](LOCAL.md) ;
+> l'état réel du projet est dans [STATUS.md](STATUS.md).
+
 ## 1. Objectif
 
 Construire un serveur MCP distant, écrit en Rust, qui permet à un assistant IA de consulter Parfumo et d'agir sur un compte Parfumo au nom de son propriétaire. Le périmètre visé est l'ensemble des fonctions du site : base de données, collection, notes et avis, social, profil.
