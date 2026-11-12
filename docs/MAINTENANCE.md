@@ -195,7 +195,7 @@ autorisation : le client légitime doit alors se reconnecter. C'est voulu.
 sort pas du réseau Docker.
 
 **Surveillance.** `GET /healthz` répond 200 tant que la base répond, et donne le dernier
-verdict du canari : `{"canary":{"at":…,"status":"ok"},"status":"ok","version":"0.1.0"}`. Le
+verdict du canari : `{"canary":{"at":…,"status":"ok"},"status":"ok","version":"0.1.1"}`. Le
 verdict du canari ne fait jamais échouer le contrôle de santé : un conteneur ne doit pas
 redémarrer parce que Parfumo a changé une page.
 
