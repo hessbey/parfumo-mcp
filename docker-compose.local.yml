@@ -1,0 +1,27 @@
+# Local trial without HTTPS or Caddy:
+#   docker compose -f docker-compose.local.yml up -d
+#   curl http://localhost:8080/healthz
+services:
+  server:
+    build: .
+    image: parfumo-mcp-server:local
+    env_file: .env
+    environment:
+      PARFUMO_MCP_BIND: 0.0.0.0:8080
+      PARFUMO_MCP_DB: /data/parfumo-mcp.db
+      PARFUMO_MCP_PUBLIC_URL: http://localhost:8080
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - parfumo-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 256m
+    pids_limit: 128
+
+volumes:
+  parfumo-data:

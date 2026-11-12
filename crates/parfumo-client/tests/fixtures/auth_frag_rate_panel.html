@@ -1,0 +1,432 @@
+
+<h2 class="text-xl">Rate</h2>
+<div class="text-sm lightgrey">Submit your rating for the perfume</div>
+<div class="rate-grid mt-2">
+							<div class="rateelement_box">
+				<div class="vote_element">
+					<div class="vote_stars_desc">
+						<img src="https://www.parfumo.com/assets/images/icons/icon_scent.svg" alt="Scent"> Scent						<a class="pointer vote_remove_63363_scent" onclick="removePerfumeVote('scent', '63363')"><i class="fa fa-times-circle lightgrey"></i></a>
+					</div>
+					<div class="rateelement w-100"><div class="pstars star stars_scent stars_scent_63363 stars" id="pstars63363__m" data-pstars-step="0.25" data-pstars-min="0" data-pstars-value="3.75" data-pstars-starwidth="32" style="cursor:pointer;"></div>
+	<div class="rateelement_hovertext lightblue hover_63363_scent" id="hover63363__m">7.5</div></div>				</div>
+			</div>
+								<div class="rateelement_box">
+				<div class="vote_element">
+					<div class="vote_stars_desc">
+						<img src="https://www.parfumo.com/assets/images/icons/icon_durability.svg" alt="Longevity"> Longevity						<a class="pointer vote_remove_63363_durability hide" onclick="removePerfumeVote('durability', '63363')"><i class="fa fa-times-circle lightgrey"></i></a>
+					</div>
+					<div class="rateelement w-100"><div class="pstars star stars_durability stars_durability_63363 stars_d" id="pstars63363_d_m" data-pstars-step="" data-pstars-min="0" data-pstars-value="0" data-pstars-starwidth="32" style="cursor:pointer;"></div>
+	<div class="rateelement_hovertext lightblue hover_63363_durability" id="hover63363_d_m">0.0</div></div>				</div>
+			</div>
+								<div class="rateelement_box">
+				<div class="vote_element">
+					<div class="vote_stars_desc">
+						<img src="https://www.parfumo.com/assets/images/icons/icon_sillage.svg" alt="Sillage"> Sillage						<a class="pointer vote_remove_63363_sillage hide" onclick="removePerfumeVote('sillage', '63363')"><i class="fa fa-times-circle lightgrey"></i></a>
+					</div>
+					<div class="rateelement w-100"><div class="pstars star stars_sillage stars_sillage_63363 stars_s" id="pstars63363_s_m" data-pstars-step="" data-pstars-min="0" data-pstars-value="0" data-pstars-starwidth="32" style="cursor:pointer;"></div>
+	<div class="rateelement_hovertext lightblue hover_63363_sillage" id="hover63363_s_m">0.0</div></div>				</div>
+			</div>
+								<div class="rateelement_box">
+				<div class="vote_element">
+					<div class="vote_stars_desc">
+						<img src="https://www.parfumo.com/assets/images/icons/icon_bottle.svg" alt="Bottle"> Bottle						<a class="pointer vote_remove_63363_bottle hide" onclick="removePerfumeVote('bottle', '63363')"><i class="fa fa-times-circle lightgrey"></i></a>
+					</div>
+					<div class="rateelement w-100"><div class="pstars star stars_bottle stars_bottle_63363 stars_b" id="pstars63363_b_m" data-pstars-step="" data-pstars-min="0" data-pstars-value="0" data-pstars-starwidth="32" style="cursor:pointer;"></div>
+	<div class="rateelement_hovertext lightblue hover_63363_bottle" id="hover63363_b_m">0.0</div></div>				</div>
+			</div>
+								<div class="rateelement_box">
+				<div class="vote_element">
+					<div class="vote_stars_desc">
+						<img src="https://www.parfumo.com/assets/images/icons/icon_pricing.svg" alt="Value for money"> Value for money						<a class="pointer vote_remove_63363_pricing hide" onclick="removePerfumeVote('pricing', '63363')"><i class="fa fa-times-circle lightgrey"></i></a>
+					</div>
+					<div class="rateelement w-100"><div class="pstars star stars_pricing stars_pricing_63363 stars_p" id="pstars63363_p_m" data-pstars-step="" data-pstars-min="0" data-pstars-value="0" data-pstars-starwidth="32" style="cursor:pointer;"></div>
+	<div class="rateelement_hovertext lightblue hover_63363_pricing" id="hover63363_p_m">0.0</div></div>				</div>
+			</div>
+			</div>
+
+<script>
+		function getVotingPercDesc(type, nearest) {
+
+		nearest_text = '';
+
+		if(type == 'scent') {
+			if(nearest < 25) { nearest_text = 'Very poor'; }
+			if(nearest >= 25 && nearest < 50) { nearest_text = 'Poor'; }
+			if(nearest >= 50 && nearest < 75) { nearest_text = 'Average'; }
+			if(nearest >= 75 && nearest < 100) { nearest_text = 'Good'; }
+			if(nearest > 99) { nearest_text = 'Very good'; }
+		}
+		
+		if(type == 'durability') {
+			if(nearest < 25) { nearest_text = 'Very short-lasting'; }
+			if(nearest > 25 && nearest < 50) { nearest_text = 'Short-lasting'; }
+			if(nearest >= 50 && nearest < 75) { nearest_text = 'Moderate'; }
+			if(nearest >= 75 && nearest < 100) { nearest_text = 'Long-lasting'; }
+			if(nearest > 99) { nearest_text = 'Very long-lasting'; }
+		}
+		
+		if(type == 'bottle') {
+			if(nearest < 25) { nearest_text = 'Fail'; }
+			if(nearest > 25 && nearest < 50) { nearest_text = 'Poor'; }
+			if(nearest >= 50 && nearest < 75) { nearest_text = 'Average'; }
+			if(nearest >= 75 && nearest < 100) { nearest_text = 'Good'; }
+			if(nearest > 99) { nearest_text = 'Very good'; }
+		}
+		
+		if(type == 'sillage') {
+			if(nearest < 25) { nearest_text = 'Very soft'; }
+			if(nearest > 25 && nearest < 50) { nearest_text = 'Soft'; }
+			if(nearest >= 50 && nearest < 75) { nearest_text = 'Moderate'; }
+			if(nearest >= 75 && nearest < 100) { nearest_text = 'Strong'; }
+			if(nearest > 99) { nearest_text = 'Very strong'; }
+		} 
+
+		if(type == 'pricing') {
+			if(nearest < 25) { nearest_text = 'Very expensive'; }
+			if(nearest > 25 && nearest < 50) { nearest_text = 'Expensive'; }
+			if(nearest >= 50 && nearest < 75) { nearest_text = 'Average'; }
+			if(nearest >= 75 && nearest < 100) { nearest_text = 'Good value'; }
+			if(nearest > 99) { nearest_text = 'Very good value'; }
+		} 
+		
+		return nearest_text; }(function () {
+			var stars = document.getElementById("pstars63363__m");
+			var hover = document.getElementById("hover63363__m");
+			var voted = hover.textContent;
+
+			function label(v) {
+				return (v * 2).toFixed(1) + " - " + getVotingPercDesc("scent", v * 20);
+			}
+
+			stars.addEventListener("over", function (e) {
+				hover.textContent = e.detail == null ? voted : label(e.detail);
+			});
+
+			stars.addEventListener("rated", function (e) {
+				voted = label(e.detail);
+				hover.textContent = voted;
+				postAction("perfume/add_vote", { type: "scent", p_id: 63363, v: e.detail * 20 }).then(function () {
+					$$(".vote_remove_63363_scent").forEach(function (x) {
+						if (x.classList.contains("hide") || x.style.display == "none") {
+							x.classList.remove("hide");
+							x.style.display = "";
+							pAnimate(x, "fadeIn");
+						}
+					});
+				});
+			});
+
+			stars.addEventListener("pstars:reset", function () {
+				voted = "0.0";
+				hover.textContent = voted;
+			});
+		})();
+		</script><script>
+		function getVotingPercDesc(type, nearest) {
+
+		nearest_text = '';
+
+		if(type == 'scent') {
+			if(nearest < 25) { nearest_text = 'Very poor'; }
+			if(nearest >= 25 && nearest < 50) { nearest_text = 'Poor'; }
+			if(nearest >= 50 && nearest < 75) { nearest_text = 'Average'; }
+			if(nearest >= 75 && nearest < 100) { nearest_text = 'Good'; }
+			if(nearest > 99) { nearest_text = 'Very good'; }
+		}
+		
+		if(type == 'durability') {
+			if(nearest < 25) { nearest_text = 'Very short-lasting'; }
+			if(nearest > 25 && nearest < 50) { nearest_text = 'Short-lasting'; }
+			if(nearest >= 50 && nearest < 75) { nearest_text = 'Moderate'; }
+			if(nearest >= 75 && nearest < 100) { nearest_text = 'Long-lasting'; }
+			if(nearest > 99) { nearest_text = 'Very long-lasting'; }
+		}
+		
+		if(type == 'bottle') {
+			if(nearest < 25) { nearest_text = 'Fail'; }
+			if(nearest > 25 && nearest < 50) { nearest_text = 'Poor'; }
+			if(nearest >= 50 && nearest < 75) { nearest_text = 'Average'; }
+			if(nearest >= 75 && nearest < 100) { nearest_text = 'Good'; }
+			if(nearest > 99) { nearest_text = 'Very good'; }
+		}
+		
+		if(type == 'sillage') {
+			if(nearest < 25) { nearest_text = 'Very soft'; }
+			if(nearest > 25 && nearest < 50) { nearest_text = 'Soft'; }
+			if(nearest >= 50 && nearest < 75) { nearest_text = 'Moderate'; }
+			if(nearest >= 75 && nearest < 100) { nearest_text = 'Strong'; }
+			if(nearest > 99) { nearest_text = 'Very strong'; }
+		} 
+
+		if(type == 'pricing') {
+			if(nearest < 25) { nearest_text = 'Very expensive'; }
+			if(nearest > 25 && nearest < 50) { nearest_text = 'Expensive'; }
+			if(nearest >= 50 && nearest < 75) { nearest_text = 'Average'; }
+			if(nearest >= 75 && nearest < 100) { nearest_text = 'Good value'; }
+			if(nearest > 99) { nearest_text = 'Very good value'; }
+		} 
+		
+		return nearest_text; }(function () {
+			var stars = document.getElementById("pstars63363_d_m");
+			var hover = document.getElementById("hover63363_d_m");
+			var voted = hover.textContent;
+
+			function label(v) {
+				return (v * 2).toFixed(1) + " - " + getVotingPercDesc("durability", v * 20);
+			}
+
+			stars.addEventListener("over", function (e) {
+				hover.textContent = e.detail == null ? voted : label(e.detail);
+			});
+
+			stars.addEventListener("rated", function (e) {
+				voted = label(e.detail);
+				hover.textContent = voted;
+				postAction("perfume/add_vote", { type: "durability", p_id: 63363, v: e.detail * 20 }).then(function () {
+					$$(".vote_remove_63363_durability").forEach(function (x) {
+						if (x.classList.contains("hide") || x.style.display == "none") {
+							x.classList.remove("hide");
+							x.style.display = "";
+							pAnimate(x, "fadeIn");
+						}
+					});
+				});
+			});
+
+			stars.addEventListener("pstars:reset", function () {
+				voted = "0.0";
+				hover.textContent = voted;
+			});
+		})();
+		</script><script>
+		function getVotingPercDesc(type, nearest) {
+
+		nearest_text = '';
+
+		if(type == 'scent') {
+			if(nearest < 25) { nearest_text = 'Very poor'; }
+			if(nearest >= 25 && nearest < 50) { nearest_text = 'Poor'; }
+			if(nearest >= 50 && nearest < 75) { nearest_text = 'Average'; }
+			if(nearest >= 75 && nearest < 100) { nearest_text = 'Good'; }
+			if(nearest > 99) { nearest_text = 'Very good'; }
+		}
+		
+		if(type == 'durability') {
+			if(nearest < 25) { nearest_text = 'Very short-lasting'; }
+			if(nearest > 25 && nearest < 50) { nearest_text = 'Short-lasting'; }
+			if(nearest >= 50 && nearest < 75) { nearest_text = 'Moderate'; }
+			if(nearest >= 75 && nearest < 100) { nearest_text = 'Long-lasting'; }
+			if(nearest > 99) { nearest_text = 'Very long-lasting'; }
+		}
+		
+		if(type == 'bottle') {
+			if(nearest < 25) { nearest_text = 'Fail'; }
+			if(nearest > 25 && nearest < 50) { nearest_text = 'Poor'; }
+			if(nearest >= 50 && nearest < 75) { nearest_text = 'Average'; }
+			if(nearest >= 75 && nearest < 100) { nearest_text = 'Good'; }
+			if(nearest > 99) { nearest_text = 'Very good'; }
+		}
+		
+		if(type == 'sillage') {
+			if(nearest < 25) { nearest_text = 'Very soft'; }
+			if(nearest > 25 && nearest < 50) { nearest_text = 'Soft'; }
+			if(nearest >= 50 && nearest < 75) { nearest_text = 'Moderate'; }
+			if(nearest >= 75 && nearest < 100) { nearest_text = 'Strong'; }
+			if(nearest > 99) { nearest_text = 'Very strong'; }
+		} 
+
+		if(type == 'pricing') {
+			if(nearest < 25) { nearest_text = 'Very expensive'; }
+			if(nearest > 25 && nearest < 50) { nearest_text = 'Expensive'; }
+			if(nearest >= 50 && nearest < 75) { nearest_text = 'Average'; }
+			if(nearest >= 75 && nearest < 100) { nearest_text = 'Good value'; }
+			if(nearest > 99) { nearest_text = 'Very good value'; }
+		} 
+		
+		return nearest_text; }(function () {
+			var stars = document.getElementById("pstars63363_s_m");
+			var hover = document.getElementById("hover63363_s_m");
+			var voted = hover.textContent;
+
+			function label(v) {
+				return (v * 2).toFixed(1) + " - " + getVotingPercDesc("sillage", v * 20);
+			}
+
+			stars.addEventListener("over", function (e) {
+				hover.textContent = e.detail == null ? voted : label(e.detail);
+			});
+
+			stars.addEventListener("rated", function (e) {
+				voted = label(e.detail);
+				hover.textContent = voted;
+				postAction("perfume/add_vote", { type: "sillage", p_id: 63363, v: e.detail * 20 }).then(function () {
+					$$(".vote_remove_63363_sillage").forEach(function (x) {
+						if (x.classList.contains("hide") || x.style.display == "none") {
+							x.classList.remove("hide");
+							x.style.display = "";
+							pAnimate(x, "fadeIn");
+						}
+					});
+				});
+			});
+
+			stars.addEventListener("pstars:reset", function () {
+				voted = "0.0";
+				hover.textContent = voted;
+			});
+		})();
+		</script><script>
+		function getVotingPercDesc(type, nearest) {
+
+		nearest_text = '';
+
+		if(type == 'scent') {
+			if(nearest < 25) { nearest_text = 'Very poor'; }
+			if(nearest >= 25 && nearest < 50) { nearest_text = 'Poor'; }
+			if(nearest >= 50 && nearest < 75) { nearest_text = 'Average'; }
+			if(nearest >= 75 && nearest < 100) { nearest_text = 'Good'; }
+			if(nearest > 99) { nearest_text = 'Very good'; }
+		}
+		
+		if(type == 'durability') {
+			if(nearest < 25) { nearest_text = 'Very short-lasting'; }
+			if(nearest > 25 && nearest < 50) { nearest_text = 'Short-lasting'; }
+			if(nearest >= 50 && nearest < 75) { nearest_text = 'Moderate'; }
+			if(nearest >= 75 && nearest < 100) { nearest_text = 'Long-lasting'; }
+			if(nearest > 99) { nearest_text = 'Very long-lasting'; }
+		}
+		
+		if(type == 'bottle') {
+			if(nearest < 25) { nearest_text = 'Fail'; }
+			if(nearest > 25 && nearest < 50) { nearest_text = 'Poor'; }
+			if(nearest >= 50 && nearest < 75) { nearest_text = 'Average'; }
+			if(nearest >= 75 && nearest < 100) { nearest_text = 'Good'; }
+			if(nearest > 99) { nearest_text = 'Very good'; }
+		}
+		
+		if(type == 'sillage') {
+			if(nearest < 25) { nearest_text = 'Very soft'; }
+			if(nearest > 25 && nearest < 50) { nearest_text = 'Soft'; }
+			if(nearest >= 50 && nearest < 75) { nearest_text = 'Moderate'; }
+			if(nearest >= 75 && nearest < 100) { nearest_text = 'Strong'; }
+			if(nearest > 99) { nearest_text = 'Very strong'; }
+		} 
+
+		if(type == 'pricing') {
+			if(nearest < 25) { nearest_text = 'Very expensive'; }
+			if(nearest > 25 && nearest < 50) { nearest_text = 'Expensive'; }
+			if(nearest >= 50 && nearest < 75) { nearest_text = 'Average'; }
+			if(nearest >= 75 && nearest < 100) { nearest_text = 'Good value'; }
+			if(nearest > 99) { nearest_text = 'Very good value'; }
+		} 
+		
+		return nearest_text; }(function () {
+			var stars = document.getElementById("pstars63363_b_m");
+			var hover = document.getElementById("hover63363_b_m");
+			var voted = hover.textContent;
+
+			function label(v) {
+				return (v * 2).toFixed(1) + " - " + getVotingPercDesc("bottle", v * 20);
+			}
+
+			stars.addEventListener("over", function (e) {
+				hover.textContent = e.detail == null ? voted : label(e.detail);
+			});
+
+			stars.addEventListener("rated", function (e) {
+				voted = label(e.detail);
+				hover.textContent = voted;
+				postAction("perfume/add_vote", { type: "bottle", p_id: 63363, v: e.detail * 20 }).then(function () {
+					$$(".vote_remove_63363_bottle").forEach(function (x) {
+						if (x.classList.contains("hide") || x.style.display == "none") {
+							x.classList.remove("hide");
+							x.style.display = "";
+							pAnimate(x, "fadeIn");
+						}
+					});
+				});
+			});
+
+			stars.addEventListener("pstars:reset", function () {
+				voted = "0.0";
+				hover.textContent = voted;
+			});
+		})();
+		</script><script>
+		function getVotingPercDesc(type, nearest) {
+
+		nearest_text = '';
+
+		if(type == 'scent') {
+			if(nearest < 25) { nearest_text = 'Very poor'; }
+			if(nearest >= 25 && nearest < 50) { nearest_text = 'Poor'; }
+			if(nearest >= 50 && nearest < 75) { nearest_text = 'Average'; }
+			if(nearest >= 75 && nearest < 100) { nearest_text = 'Good'; }
+			if(nearest > 99) { nearest_text = 'Very good'; }
+		}
+		
+		if(type == 'durability') {
+			if(nearest < 25) { nearest_text = 'Very short-lasting'; }
+			if(nearest > 25 && nearest < 50) { nearest_text = 'Short-lasting'; }
+			if(nearest >= 50 && nearest < 75) { nearest_text = 'Moderate'; }
+			if(nearest >= 75 && nearest < 100) { nearest_text = 'Long-lasting'; }
+			if(nearest > 99) { nearest_text = 'Very long-lasting'; }
+		}
+		
+		if(type == 'bottle') {
+			if(nearest < 25) { nearest_text = 'Fail'; }
+			if(nearest > 25 && nearest < 50) { nearest_text = 'Poor'; }
+			if(nearest >= 50 && nearest < 75) { nearest_text = 'Average'; }
+			if(nearest >= 75 && nearest < 100) { nearest_text = 'Good'; }
+			if(nearest > 99) { nearest_text = 'Very good'; }
+		}
+		
+		if(type == 'sillage') {
+			if(nearest < 25) { nearest_text = 'Very soft'; }
+			if(nearest > 25 && nearest < 50) { nearest_text = 'Soft'; }
+			if(nearest >= 50 && nearest < 75) { nearest_text = 'Moderate'; }
+			if(nearest >= 75 && nearest < 100) { nearest_text = 'Strong'; }
+			if(nearest > 99) { nearest_text = 'Very strong'; }
+		} 
+
+		if(type == 'pricing') {
+			if(nearest < 25) { nearest_text = 'Very expensive'; }
+			if(nearest > 25 && nearest < 50) { nearest_text = 'Expensive'; }
+			if(nearest >= 50 && nearest < 75) { nearest_text = 'Average'; }
+			if(nearest >= 75 && nearest < 100) { nearest_text = 'Good value'; }
+			if(nearest > 99) { nearest_text = 'Very good value'; }
+		} 
+		
+		return nearest_text; }(function () {
+			var stars = document.getElementById("pstars63363_p_m");
+			var hover = document.getElementById("hover63363_p_m");
+			var voted = hover.textContent;
+
+			function label(v) {
+				return (v * 2).toFixed(1) + " - " + getVotingPercDesc("pricing", v * 20);
+			}
+
+			stars.addEventListener("over", function (e) {
+				hover.textContent = e.detail == null ? voted : label(e.detail);
+			});
+
+			stars.addEventListener("rated", function (e) {
+				voted = label(e.detail);
+				hover.textContent = voted;
+				postAction("perfume/add_vote", { type: "pricing", p_id: 63363, v: e.detail * 20 }).then(function () {
+					$$(".vote_remove_63363_pricing").forEach(function (x) {
+						if (x.classList.contains("hide") || x.style.display == "none") {
+							x.classList.remove("hide");
+							x.style.display = "";
+							pAnimate(x, "fadeIn");
+						}
+					});
+				});
+			});
+
+			stars.addEventListener("pstars:reset", function () {
+				voted = "0.0";
+				hover.textContent = voted;
+			});
+		})();
+		</script>

@@ -1,0 +1,75 @@
+
+<h2 class="text-xl">Add Statement</h2>
+<div class="text-sm lightgrey mb-2">Please follow our <a href="https://www.parfumo.com/rules/1" target="_blank" class="grey">Rules for Perfume Reviews</a>. For questions or general discussion use the <a href="https://www.parfumo.com/forum" class="grey">Forum</a>.</div>
+
+<form>
+	<input type="hidden" name="p" id="form_perfume_id" value="63363">
+	<textarea class="plinker uk-textarea autosize form_statement_text" name="statement_text" id="statement_text" maxlength="140"></textarea>
+	<div class="counter-container-rev-63363 text-xs leading-6 lightgrey mt-0-5"></div>
+
+	<div id="statement_validation" class="pink mb-1 hide">
+		<span class="bold">The following error(s) occurred:</span>
+		<div id="statement_validation_message"></div>
+	</div>
+
+	<div class="mt-2 mb-1">
+		<div class="text-lg bold">Scent associations</div>
+		<div class="text-sm lightgrey">What does this perfume remind you of?</div>
+
+		<input id="p-tags-input-statements" type="text" placeholder="Add word...">
+	</div>
+
+	<div class="pbtn-row">
+		<button class="action_submit_statement pbtn pbtn-blue" type="button">Post Statement</button>
+		<button class="pbtn pbtn-lightgrey2" type="button" onclick="PModal.close()">Cancel</button>
+			</div>
+</form>
+
+<script>
+	var pTagsStatement = new PTagsInput(document.getElementById('p-tags-input-statements'), {
+		maxChars: 20,
+		maxTags: 6,
+		trimValue: true
+	});
+
+	
+	document.getElementById('p-tags-input-statements').addEventListener('itemAdded', function(e) {
+		updatePerfumeTags('add', 63363, e.detail.item);
+	});
+
+	document.getElementById('p-tags-input-statements').addEventListener('itemRemoved', function(e) {
+		updatePerfumeTags('remove', 63363, e.detail.item);
+	});
+
+	$(".action_submit_statement").click(function() {
+		postStatement();
+	});
+
+	maxlength(document.getElementById('statement_text'), document.querySelector('.counter-container-rev-63363'));
+
+	
+	$('.action_delete_statement').click(function() {
+		var btn = $(this);
+		actionPopup(
+			'Delete Statement',
+			'Are you sure you want to delete your statement for this perfume?',
+			'Cancel',
+			'Delete',
+			'pink',
+			function() {
+				postAction('statement/delete_statement', {
+					id: btn.data('id'),
+					p: btn.data('p'),
+					h: btn.data('h')
+				}).then(response => response.json()).then(function() {
+					PModal.closeAll();
+					if (typeof getPerfumeStatements === 'function') {
+						statements_f = 0;
+						getPerfumeStatements(0, statements_o, false, btn.data('p'), '0123456789abcdef0123456789abcdef');
+					}
+					$('.pd_statement_panel .ptabs-tick').remove();
+				});
+			}
+		);
+	});
+</script>

@@ -1,0 +1,64 @@
+# Parfumo MCP server behind Caddy (automatic HTTPS).
+# Copy .env.example to .env, fill it in, then: docker compose up -d
+# Full guide: docs/HOSTING.md. Operations: docs/MAINTENANCE.md.
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+services:
+  server:
+    build: .
+    image: parfumo-mcp-server:local
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      PARFUMO_MCP_BIND: 0.0.0.0:8080
+      PARFUMO_MCP_DB: /data/parfumo-mcp.db
+      PARFUMO_MCP_PUBLIC_URL: https://${PARFUMO_MCP_DOMAIN:?set PARFUMO_MCP_DOMAIN in .env}
+    volumes:
+      - parfumo-data:/data
+    # No published port: only Caddy is exposed. For a local trial without HTTPS,
+    # see docker-compose.local.yml.
+    expose:
+      - "8080"
+    # Hardening: read-only file system (only /data is writable), no capability,
+    # no privilege escalation, bounded memory and process count.
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 256m
+    pids_limit: 128
+    stop_grace_period: 20s
+    logging: *logging
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      server:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      PARFUMO_MCP_DOMAIN: ${PARFUMO_MCP_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    security_opt:
+      - no-new-privileges:true
+    logging: *logging
+
+volumes:
+  # SQLite database: users, encrypted secrets, sessions, audit log. Back it up.
+  parfumo-data:
+  # HTTPS certificates obtained by Caddy.
+  caddy-data:
+  caddy-config:

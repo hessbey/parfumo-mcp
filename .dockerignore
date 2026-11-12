@@ -1,0 +1,16 @@
+# The build only needs Cargo.toml, Cargo.lock and crates/ (without the test fixtures).
+target
+.git
+.github
+.env
+.env.*
+!.env.example
+docs
+scripts
+*.md
+*.log
+*.sh
+*.db
+*.db-*
+data
+crates/parfumo-client/tests/fixtures

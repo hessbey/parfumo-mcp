@@ -1,0 +1,36 @@
+
+<div class="header">
+	<div class="img mr-1">
+		<a href="https://www.parfumo.com/Perfumes/Dior/Sauvage_Eau_de_Parfum"><img src="https://media.parfumo.com/perfumes/a0/a0ef46-sauvage-eau-de-parfum-dior_1200.jpg?width=240&aspect_ratio=1:1" alt="Sauvage (Eau de Parfum) - Dior" class="pimg"></a>
+		<div class="mt-0-5">
+			<div class="upper lightgrey text-2xs">Reminds of</span></div>
+			<a href="https://www.parfumo.com/Perfumes/Dior/Sauvage_Eau_de_Toilette" class="grey text-2xs">Sauvage <span class="label_a upper small"> Eau de Toilette</span></a>
+		</div>
+	</div>
+	<div class="title">
+		<a href="https://www.parfumo.com/Perfumes/Dior/Sauvage_Eau_de_Parfum" class="black bold text-lg">Sauvage <span class="label_a upper small"> Eau de Parfum</span></a>
+		<div><a href="https://www.parfumo.com/Perfumes/Dior" class="lightgrey">Dior</a></div>
+					<div class="mt-1 pointer">
+				<span class="flex flex-wrap"><div class="s-circle-container mb-0-5"><div class="s-circle s-circle_l zoom-in" style="background: #81abfd"></div><div class="text-xs grey">Fresh</div></div><div class="s-circle-container mb-0-5"><div class="s-circle s-circle_l zoom-in" style="background: #8eb3ae"></div><div class="text-xs grey">Spicy</div></div><div class="s-circle-container mb-0-5"><div class="s-circle s-circle_m zoom-in" style="background: #9cb1e8"></div><div class="text-xs grey">Synthetic</div></div></span>
+			</div>
+				<div class="mt-0-5">
+			<div class="upper grey text-2xs mt-1 mb-0-5">Community Consensus</div>
+			<div class="barfiller barfiller_similar barfillerbg_color_similar">
+				<span class="fill barfiller_color_similar" data-percentage="91.4"></span>
+			</div>
+			<div class="text-2xs grey mt-0-5"><span class="total_all">268</span> Ratings</div>
+		</div>
+					</div>
+</div>
+
+<script>
+	document.querySelectorAll('.barfiller_similar').forEach(function(el) {
+		barfiller(el, { duration: 750 });
+	});
+	$('.similar-vote-vote').click(
+		function() {
+			$('.similar-vote-vote').prop('disabled', true);
+			updateSimilarVoteVote($(this), 'similar', $(this).data('pid'), $(this).data('sid'), $(this).data('state'), $(this).data('vote'), 'pbtn-turquoise', 'fixturecsrfkey00');
+		}
+	);
+</script>

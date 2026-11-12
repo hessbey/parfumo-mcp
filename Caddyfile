@@ -1,0 +1,18 @@
+{$PARFUMO_MCP_DOMAIN} {
+	encode zstd gzip
+
+	# The server only expects small forms and JSON-RPC requests.
+	request_body {
+		max_size 1MB
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		-Server
+	}
+
+	# Caddy replaces the X-Forwarded-For header sent by the client with the real address:
+	# the server uses it to rate-limit login attempts per address.
+	reverse_proxy server:8080
+}

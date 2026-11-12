@@ -1,0 +1,184 @@
+
+<div class="mt-0-5 mb-1">
+	<span class="btn_i_wear pbtn pbtn-lightgrey pbtn-small action_iwear" data-pid="63363" title="I'm currently wearing this Perfume"><i class="fa fa-tint lightgrey"></i></span>
+			<span class="action_add_layering pbtn pbtn-lightgrey pbtn-small" title="Layering"><i class="fa fa-plus lightgrey"></i></span>
+		<span class="action_edit_comment pbtn pbtn-lightgrey pbtn-small"><i class="fa fa-sticky-note lightgrey"></i> <i class="fa fa-angle-down arr-edit_comment"></i></span>
+	<span class="action_edit_date pbtn pbtn-lightgrey pbtn-small"><i class="fa fa-calendar lightgrey"></i> <i class="fa fa-angle-down arr-edit_date"></i></span>
+	<div class="layering_search hide mt-1 mb-2 nobold">
+		<div class="text-xs lightgrey mb-0-5">Layering</div>
+		<input type="text" id="s_layering_22205264" class="uk-input uk-input-small" autocomplete="off" placeholder="Search Perfume..." data-ls="/action/livesearch/livesearch_layering.php" data-ls-popup="#livesearch_layering_22205264" data-ls-params='{"l_id":22205264,"not_id":"63363"}'>
+		<div class="ls_popup_wrap">
+			<div class="ls_popup" id="livesearch_layering_22205264"></div>
+		</div>
+	</div>
+	<div class="hide edit_comment mt-1 mb-2">
+		<form onsubmit="return false;" class="nobold text-xs">
+			<textarea class="uk-textarea uk-textarea-small autosize comment_input_22205264" maxlength="255" rows="2" placeholder="Notes..."></textarea>
+			<div class="counter-container-comment-22205264 text-xs leading-6 lightgrey"></div>
+			<div class="mt-0-5">
+				<span class="pbtn pbtn-lightgrey pbtn-small action_save_comment">Save</span>
+			</div>
+		</form>
+	</div>
+	<div class="hide edit_date mt-1 mb-2">
+		<div class="flex">
+			<div>
+				<input type="datetime-local" class="uk-input mr-0-5" min="2000-01-01T00:00" max="2026-11-12T07:21" value="2026-11-12T07:21">
+			</div>
+			<div>
+				<span class="pbtn pbtn-lightgrey pbtn-small action_save_date ml-0-5">Save</span>
+			</div>
+		</div>
+		<div class="action_iwear_delete pbtn-link mt-1"><i class="fa fa-trash lightgrey"></i> Delete entry</div>
+	</div>
+
+	<div class="nobold text-xs lightgrey mt-1">
+
+		
+		
+		<div class="flex mt-1">
+			<div class="mr-0-5"><i class="fa fa-fire lightgrey leading-none"></i></div>
+			<div>Worn 1 times</div>
+		</div>
+
+		
+					<div class="flex mt-1">
+				<div class="mr-0-5"><i class="fa fa-star lightgrey leading-none"></i></div>
+				<div>First use A moment ago</div>
+			</div>
+		
+					<div class="flex mt-1">
+				<div class="mr-0-5"><i class="fa fa-minus lightgrey leading-none"></i></div>
+				<div>Currently not in your collection.</div>
+			</div>
+		
+	</div>
+
+	<script>
+		maxlength(document.querySelector('.comment_input_22205264'), document.querySelector('.counter-container-comment-22205264'));
+
+		$('.action_iwear').click(
+			function() {
+				pid = $(this).data('pid');
+				btn = $(this);
+				actionPopup(
+					'Wearing this perfume right now?',
+					'Only click <strong>Yes</strong> if you really wear the fragrance. Otherwise, your personal assistant cannot give you reliable tips.',
+					'Cancel',
+					'Just sprayed on!',
+					'blue',
+					function() {
+						btn.remove();
+						updateIWear(pid);
+						hideActionPopup();
+						iWearSpray();
+					}
+				);
+			}
+		);
+
+		$('.action_iwear_delete').click(
+			function() {
+				actionPopup(
+					'Delete entry',
+					'Are you sure you want to delete this entry?',
+					'Cancel',
+					'Delete',
+					'pink',
+					function() {
+						postAction('account/delete_iwear', {
+							id: '22205264'
+						}).then(() => {
+							$('#tablerow22205264').fadeOut('fast');
+							hideActionPopup();
+						});
+					}
+				);
+			}
+		);
+
+		$('.action_edit_date').click(function() {
+			toggleWithArrows('.edit_date', '.arr-edit_date');
+		});
+
+		$('.action_save_date').click(function() {
+
+			var date_input = $(this).parent().parent().find('input');
+			var new_date = date_input.val();
+
+			postAction('account/update_iwear_date', {
+				id: '22205264',
+				new_date: new_date
+			}).then(response => response.text()).then(data => {
+				if (data == '1') {
+					toggleWithArrows('.edit_date', '.arr-edit_date');
+					VanillaToasts.create({
+						title: 'Date updated',
+						text: 'Reload the page to see the changes.',
+						type: 'green',
+						timeout: 5000
+					});
+				} else {
+					pAnimate('.edit_date', 'headShake');
+				}
+			});
+		});
+
+		$('.action_edit_comment').click(function() {
+			toggleWithArrows('.edit_comment', '.arr-edit_comment');
+			$('.comment_input_22205264').focus();
+		});
+
+		$('.action_save_comment').click(function() {
+			var comment = $('.comment_input_22205264').val();
+			postAction('account/update_iwear_comment', {
+				id: '22205264',
+				comment: comment
+			}).then(response => response.text()).then(data => {
+				if (data == '1') {
+					$('.edit_comment').slideUp('fast');
+					$('.tracker_details_22205264').html('<div class="ajax_loader_div"></div>');
+					postAction('assistant/tracker_details', {
+						l_id: '22205264'
+					}).then(r => r.text()).then(function(data) {
+						$('.tracker_details_22205264').html(data);
+					});
+				}
+			});
+		});
+
+		$('.action_add_layering').click(function() {
+			$('.layering_search').slideToggle('fast');
+			$('#s_layering_22205264').focus();
+		});
+
+		$('#livesearch_layering_22205264').on('click', '.action_select_layering', function() {
+			var p_id = $(this).data('id');
+			postAction('account/update_iwear_layering', {
+				id: '22205264',
+				layered_with_id: p_id
+			}).then(() => {
+				$('.tracker_details_22205264').html('<div class="ajax_loader_div"></div>');
+				postAction('assistant/tracker_details', {
+					l_id: '22205264'
+				}).then(r => r.text()).then(function(data) {
+					$('.tracker_details_22205264').html(data);
+				});
+			});
+		});
+
+		$('.action_remove_layering_22205264').click(function() {
+			postAction('account/update_iwear_layering', {
+				id: '22205264',
+				layered_with_id: 'clear'
+			}).then(() => {
+				$('.action_tracker_details[data-l_id="22205264"] .layer-pic').remove();
+				$('.tracker_details_22205264').html('<div class="ajax_loader_div"></div>');
+				postAction('assistant/tracker_details', {
+					l_id: '22205264'
+				}).then(r => r.text()).then(function(data) {
+					$('.tracker_details_22205264').html(data);
+				});
+			});
+		});
+	</script>

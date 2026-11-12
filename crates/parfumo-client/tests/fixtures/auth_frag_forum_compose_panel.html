@@ -1,0 +1,198 @@
+
+<div class="pm-title">
+			New Thread	</div>
+
+<form id="forum_compose_6af55c054b320" class="mt-2" data-endpoint="/api/forum/create_topic" novalidate>
+
+	<input type="hidden" name="csrf_key" value="0123456789abcdef0123456789abcdef">
+			<input type="hidden" name="forum_id" value="18">
+	
+			<input class="uk-input mb-1" type="text" name="subject" placeholder="Subject" maxlength="60" autocomplete="off" value="">
+	
+	<div class="prichtext" data-unlink-title="Remove link" data-video-error="Please enter a valid YouTube URL." data-max-error="Post body is too long ({max} character maximum)" data-link-error="Enter a valid URL." data-perfume-hint="Type a perfume name …" data-user-hint="Type a user name …">
+		<div class="prichtext-toolbar">
+		<button type="button" class="prichtext-btn text-sm" data-cmd="bold" title="Bold (Ctrl+B)"><b>B</b></button>
+		<button type="button" class="prichtext-btn text-sm" data-cmd="italic" title="Italic (Ctrl+I)"><i>I</i></button>
+		<button type="button" class="prichtext-btn text-sm" data-cmd="strikeThrough" title="Strikethrough"><s>S</s></button>
+		<button type="button" class="prichtext-btn text-sm" data-cmd="createLink" title="Insert link"><i class="fa fa-link"></i></button>
+		<button type="button" class="prichtext-btn text-sm" data-cmd="mention" title="Link a perfume or member"><svg viewBox="10 10 44 44" aria-hidden="true"><path d="M27.064 11.758a3.2 3.2 0 0 1 2.778 3.572l-.75 6.003h8.483l.85-6.797a3.2 3.2 0 0 1 6.35.794l-.75 6.003h5.042a3.2 3.2 0 0 1 0 6.4h-5.842l-1.067 8.533H48a3.2 3.2 0 0 1 0 6.4h-6.642l-.849 6.797a3.2 3.2 0 0 1-6.35-.793l.75-6.004h-8.484l-.85 6.797a3.2 3.2 0 1 1-6.35-.793l.75-6.004H16a3.2 3.2 0 1 1 0-6.4h4.775l1.067-8.533h-4.775a3.2 3.2 0 1 1 0-6.4h5.575l.85-6.797a3.2 3.2 0 0 1 3.572-2.778m8.645 24.508 1.066-8.533h-8.483l-1.067 8.533z"/></svg></button>
+		<button type="button" class="prichtext-btn text-sm" data-cmd="ytVideo" title="Insert video"><i class="fa fa-youtube-play"></i></button>
+					<button type="button" class="prichtext-btn text-sm" data-cmd="quote" title="Quote"><svg viewBox="12 16 40 32" aria-hidden="true"><path d="M42.321 17.81a8.21 8.21 0 0 1 8.209 8.073c.211 2.03.18 5.022-1.19 8.478-1.402 3.532-4.14 7.384-9.13 11.127a2.346 2.346 0 1 1-2.815-3.753c3.669-2.751 5.773-5.426 6.974-7.763a8.21 8.21 0 1 1-2.048-16.163m-21.111 0a8.21 8.21 0 0 1 8.209 8.073c.211 2.03.18 5.022-1.19 8.478-1.402 3.532-4.14 7.384-9.13 11.127a2.345 2.345 0 1 1-2.815-3.753c3.668-2.751 5.772-5.426 6.973-7.763a8.21 8.21 0 1 1-2.048-16.163"/></svg></button>
+							<button type="button" class="prichtext-btn text-sm" data-cmd="emoji" title="Emoji">😊</button>
+			</div>
+	<div class="prichtext-popover hide" id="forum_compose_6af55c054b320_linkpop">
+		<input type="text" inputmode="url" autocapitalize="off" class="prichtext-input" placeholder="https://example.com" autocomplete="off" spellcheck="false">
+		<button type="button" class="pbtn pbtn-blue pbtn-tiny" data-link-save>Save</button>
+		<button type="button" class="pbtn pbtn-grey pbtn-tiny" data-link-cancel>Cancel</button>
+		<button type="button" class="pbtn pbtn-grey pbtn-tiny hide" data-link-remove>Remove link</button>
+	</div>
+	<div class="prichtext-popover hide" id="forum_compose_6af55c054b320_ytpop">
+		<input type="text" inputmode="url" autocapitalize="off" class="prichtext-input" placeholder="https://www.youtube.com/watch?v=..." autocomplete="off" spellcheck="false">
+		<button type="button" class="pbtn pbtn-blue pbtn-tiny" data-yt-save>Save</button>
+		<button type="button" class="pbtn pbtn-grey pbtn-tiny" data-yt-cancel>Cancel</button>
+	</div>
+	<div class="prichtext-popover hide" id="forum_compose_6af55c054b320_mentionpop">
+		<button type="button" class="pbtn pbtn-grey pbtn-tiny" data-mention="perfume">Link a perfume</button>
+		<button type="button" class="pbtn pbtn-grey pbtn-tiny" data-mention="user">Mention a user</button>
+	</div>
+				<div class="prichtext-popover prichtext-emoji hide" id="forum_compose_6af55c054b320_emojipop"></div>
+		<div class="prichtext-editor plinker ulinker" contenteditable="true" spellcheck="false" data-placeholder="" data-autosave="forum_en_new_topic" id="forum_compose_6af55c054b320_editor"></div>
+</div>
+<input type="hidden" name="message" id="forum_compose_6af55c054b320_text">
+	<div class="review_autosave text-sm pointer mt-0-5"></div>
+	<div class="flex flex-wrap vm gap-0-5 mt-1">
+					<button type="button" class="pbtn-link text-sm" data-photo-add>Add photo</button>
+							<span class="" data-poll-open><button type="button" class="pbtn-link text-sm">Add a Poll</button></span>
+			</div>
+
+			<div class="pphotos pphotos-thumbs" data-pphotos data-max="20" data-upload-url="/api/forum/upload_pic" data-id-field="post_id" data-file-field="image_file" data-delete-action="account/delete_forum_pic" data-delete-field="p" data-label-limit="Up to 20 photos per post" data-label-failed="Some photos could not be uploaded ({0}). You can add them by editing." data-label-remove="Remove photo?" data-label-remove-action="Remove" data-label-cancel="Cancel"><input type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif" multiple class="hide" data-photo-input><div class="mt-1 hide" data-photo-wrap><div class="pthumbs" data-photo-thumbs></div></div></div>	
+			<div class="mt-1 hide" data-poll>
+			<div class="forum-poll-edit" data-poll-options data-placeholder="Answer" data-placeholder-add="Add answer">
+				<input type="text" name="poll_title" maxlength="255" placeholder="Your question" value="">
+													<input type="text" name="poll_option_text[1000]" maxlength="255" placeholder="Add answer">
+							</div>
+			<div class="flex flex-space-between vm mt-0-5">
+				<select name="poll_length" class="forum-plain-select">
+											<option value="0">No end date</option>
+											<option value="1">Runs for 1 day</option>
+											<option value="3">Runs for 3 days</option>
+											<option value="7">Runs for 1 week</option>
+											<option value="14">Runs for 2 weeks</option>
+											<option value="30">Runs for 1 month</option>
+									</select>
+				<button type="button" class="pbtn-link text-sm" data-poll-remove>Remove</button>
+			</div>
+			<input type="hidden" name="poll_delete" value="0">
+		</div>
+	
+	<div class="pink mt-1 hide" data-error></div>
+
+	<div class="pbtn-row mt-2">
+		<button type="submit" class="pbtn pbtn-blue" data-submit>Send</button>
+		<button type="button" class="pbtn pbtn-lightgrey2" data-cancel>Cancel</button>
+	</div>
+</form>
+
+<script>
+(function() {
+	var form = document.getElementById('forum_compose_6af55c054b320');
+	var rtApi = PRichtext.bind('forum_compose_6af55c054b320');
+	if (rtApi.editor.hasAttribute('data-autosave')) { autoSave(rtApi.editor); }
+	var photos = PPhotos.init(form.querySelector('[data-pphotos]'), form);
+
+	var typeSelect = form.parentElement.querySelector('[data-topic-type]');
+	if (typeSelect) {
+		typeSelect.addEventListener('change', function() {
+			var pick = typeSelect.closest('.forum-type-pick');
+			pick.querySelector('[data-topic-type-label]').textContent = pick.getAttribute('data-title-' + typeSelect.value);
+		});
+	}
+	var errorBox = form.querySelector('[data-error]');
+
+	form.querySelector('[data-cancel]').addEventListener('click', function() {
+		PModal.close();
+	});
+
+	var pollBox = form.querySelector('[data-poll]');
+	if (pollBox) {
+		var pollOpen = form.querySelector('[data-poll-open]');
+		var list = pollBox.querySelector('[data-poll-options]');
+		var nextOption = 1001;
+
+		function optionRows() {
+			return list.querySelectorAll('[name^="poll_option_text"]');
+		}
+
+		function addOptionRow() {
+			var rows = optionRows();
+			if (rows.length >= 6) { return; }
+			if (rows.length > 0) { rows[rows.length - 1].placeholder = list.dataset.placeholder; }
+			var input = document.createElement('input');
+			input.type = 'text';
+			input.maxLength = 255;
+			input.name = 'poll_option_text[' + (nextOption++) + ']';
+			input.placeholder = list.dataset.placeholderAdd;
+			list.appendChild(input);
+		}
+
+		pollOpen.querySelector('button').addEventListener('click', function() {
+			pollOpen.classList.add('hide');
+			pollBox.classList.remove('hide');
+			pollBox.querySelector('[name="poll_delete"]').value = 0;
+			pollBox.querySelector('[name="poll_title"]').focus();
+		});
+
+		pollBox.querySelector('[data-poll-remove]').addEventListener('click', function() {
+			optionRows().forEach(function(row) { row.remove(); });
+			addOptionRow();
+			pollBox.querySelector('[name="poll_title"]').value = '';
+			pollBox.querySelector('[name="poll_length"]').value = 0;
+			pollBox.querySelector('[name="poll_delete"]').value = 1;
+			pollBox.classList.add('hide');
+			pollOpen.classList.remove('hide');
+		});
+
+		list.addEventListener('input', function(e) {
+			var rows = optionRows();
+			if (e.target == rows[rows.length - 1] && e.target.value.trim() != '') {
+				addOptionRow();
+			}
+		});
+
+		list.addEventListener('focusout', function(e) {
+			var rows = optionRows();
+			if (e.target.name != 'poll_title' && e.target.value.trim() == '' && e.target != rows[rows.length - 1]) {
+				e.target.remove();
+			}
+		});
+
+		list.addEventListener('keydown', function(e) {
+			if (e.key != 'Enter') { return; }
+			e.preventDefault();
+			var inputs = list.querySelectorAll('input');
+			var index = Array.prototype.indexOf.call(inputs, e.target);
+			if (inputs[index + 1]) { inputs[index + 1].focus(); }
+		});
+	}
+
+	var subject = form.querySelector('[name="subject"]');
+	(subject && subject.value == '' ? subject : rtApi.editor).focus({ preventScroll: true });
+
+	form.addEventListener('submit', function(e) {
+		e.preventDefault();
+		var btn = form.querySelector('[data-submit]');
+		if (btn.disabled) { return; }
+		rtApi.sync();
+		var btnText = btn.innerHTML;
+		function restoreBtn() {
+			btn.innerHTML = btnText;
+			btn.style.width = '';
+			btn.disabled = false;
+		}
+		btn.style.width = btn.offsetWidth + 'px';
+		btn.innerHTML = '<i class="fa fa-spinner fa-spin fa-fw"></i>';
+		btn.disabled = true;
+		errorBox.classList.add('hide');
+		fetch(form.dataset.endpoint, { method: 'POST', body: new FormData(form), credentials: 'same-origin' })
+		.then(jsonResponse)
+		.then(function(res) {
+			if (res.ok && res.body.success) {
+				if (rtApi.editor.hasAttribute('data-autosave')) { autoSaveClear(rtApi.editor); }
+				(photos ? photos.upload(res.body.post_id) : Promise.resolve()).then(function() {
+					if (form.hasAttribute('data-in-place') && document.getElementById(res.body.post_id)) {
+						PModal.close();
+						window.forumShowPosts({ post_id: res.body.post_id }, res.body.redirect);
+						return;
+					}
+					forumGo(res.body.redirect);
+				});
+				return;
+			}
+			errorBox.textContent = res.body.error || '';
+			errorBox.classList.remove('hide');
+			restoreBtn();
+		})
+		.catch(restoreBtn);
+	});
+})();
+</script>

@@ -1,0 +1,17 @@
+[workspace]
+resolver = "3"
+members = ["crates/parfumo-client", "crates/parfumo-mcp-core", "crates/parfumo-mcp", "crates/parfumo-mcp-server"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/hessbey/parfumo-mcp"
+rust-version = "1.90"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

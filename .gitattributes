@@ -1,0 +1,3 @@
+# Same line endings on every platform: the tests read recorded pages byte for byte.
+* text=auto eol=lf
+*.png binary

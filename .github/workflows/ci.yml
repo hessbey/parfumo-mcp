@@ -1,0 +1,64 @@
+# Lint and offline tests of the four crates, release build of both binaries (local server
+# `parfumo-mcp`, HTTP server `parfumo-mcp-server`), the same tests and builds on macOS and
+# Windows, then the Docker image of the HTTP server (size, startup, idle memory).
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Lint
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Tests (recorded fixtures and local fake servers, no access to parfumo.com)
+        # All four crates. The `parfumo-mcp` tests start the real stdio binary and talk
+        # to it through its pipes, against a local fake site.
+        run: cargo test --workspace --locked
+      - name: Build both binaries (release)
+        run: cargo build --release --locked -p parfumo-mcp -p parfumo-mcp-server
+      - name: Both binaries start
+        run: |
+          target/release/parfumo-mcp --version
+          target/release/parfumo-mcp-server --version
+
+  platforms:
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Tests
+        run: cargo test --workspace --locked --no-fail-fast
+      - name: Build both binaries (release)
+        run: cargo build --release --locked -p parfumo-mcp -p parfumo-mcp-server
+      - name: Both binaries start
+        shell: bash
+        run: |
+          target/release/parfumo-mcp --version
+          target/release/parfumo-mcp-server --version
+
+  image:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Docker image of the HTTP server (build, size, startup, idle memory)
+        run: scripts/check-image.sh

@@ -1,0 +1,50 @@
+
+<div class="mb-2">
+	<div class="ptabs_search_nav flex">
+		<div class="left">
+			<div class="ptabs-container mb-0-5 ptabs-scrollable ptabs-force-scroll"><button class="scroll-button-l">&#xf104;</button><div class="fade-left"></div><nav class="flex ptabs " style="visibility:hidden"><div class="active"><a href="https://www.parfumo.com/Postbox"><img src="https://www.parfumo.com/assets/images/icons/icon_postbox.svg" alt="All" class="ptab-image"> All <span class="ptab-cnt text-3xs lightgrey">0</span></a></div><div><a href="https://www.parfumo.com/Postbox/N"><img src="https://www.parfumo.com/assets/images/icons/icon_unread.svg" alt="Unread" class="ptab-image"> Unread <span class="ptab-cnt text-3xs lightgrey">0</span></a></div></nav><div class="fade-right"></div><button class="scroll-button-r">&#xf105;</button></div><script>(function(){var c=document.currentScript;if(!c)return;c=c.previousElementSibling;var p=c.querySelector(".ptabs");if(!p)return;var a=p.querySelector(".active");if(a){p.scrollLeft=a.offsetLeft-p.offsetWidth/2+a.offsetWidth/2}p.style.visibility="visible"})();</script>		</div>
+
+		<div class="right nowrap">
+			<div onclick="toggleWithArrows('.p-filter-section-hidden-wrap','.arr')" class="pbtn pbtn-ptab pbtn-lightgrey" title="Search">
+				<i class="fa fa-search" aria-hidden="true"></i>
+			</div>
+		</div>
+	</div>
+
+	<div class="p-filter-section-hidden-wrap hide">
+		<div class="p-filter-section-hidden">
+			<div class="pf-grid">
+				<div>
+					<form action="https://www.parfumo.com/postbox_search.php" method="get">
+						<input type="hidden" name="do_search" value="1">
+						<input class="uk-input" type="text" name="q" placeholder="Search..." autocomplete="off">
+					</form>
+				</div>
+				<div>
+					<form onsubmit="return false;">
+						<input id="s_user" class="uk-input" type="text" placeholder="User..." autocomplete="off" data-ls="/action/livesearch/livesearch_user.php" data-ls-popup="#livesearch_pm2">
+					</form>
+					<div class="ls_popup_wrap">
+						<div class="ls_popup" id="livesearch_pm2"></div>
+					</div>
+				</div>
+			</div>
+		</div>
+	</div>
+
+	
+</div>
+
+<div id="pbox-view-container">
+				<a href="https://www.parfumo.com/Postbox/R/otheruser" class="block grey pointer">
+				<div class="pm_list_item">
+					<div class="pm_list_item_user"><img src="https://media.parfumo.com/user_photo/00/00_0123456789abcdef0123456789abcdef01234567_1000.jpg?width=120&aspect_ratio=1:1" alt="otheruser" loading="lazy"></div>
+					<div class="pm_list_item_message word-break">
+						<div class="text-xs lightgrey pm_list_item_user_date fr" data-time="1794464701">
+														A moment ago						</div>
+						<div class="leading-6 bold black">otheruser							 <i class="fa fa-paper-plane-o lightgrey"></i></div>
+						Test message, jalon 0 bis exploration. Please ignore.					</div>
+				</div>
+			</a>
+					</div>
+

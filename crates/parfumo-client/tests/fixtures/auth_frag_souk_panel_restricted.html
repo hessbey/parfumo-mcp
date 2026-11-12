@@ -1,0 +1,51 @@
+
+<h2 class="text-xl">Souk</h2>
+
+<div class="mt-2">
+
+	
+	<div class="souk_popup_row">
+		<div class="bold"><img src="https://www.parfumo.com/assets/images/icons/souk_offer.svg" alt="Offer" class="hl_icon"> Offer</div>
+					<div>
+				<div class="lightgrey">Not available</div>
+				<a href="https://www.parfumo.com/rules/5">Why can't I offer anything?</a>
+			</div>
+			</div>
+
+	<div class="souk_popup_row">
+		<div class="bold"><img src="https://www.parfumo.com/assets/images/icons/souk_request.svg" alt="Search Request" class="hl_icon"> Search Request</div>
+		<div class="souk_popup_btns">
+			<button class="action_souk_add pointer pbtn pbtn-transparent" data-t="normal_need" type="button"><img src="https://www.parfumo.com/assets/images/icons/souk_bottle_g.svg" alt="Perfume">Perfume</button>			<button class="action_souk_add pointer pbtn pbtn-transparent" data-t="sample_need" type="button"><img src="https://www.parfumo.com/assets/images/icons/souk_sample_g.svg" alt="Sample">Sample</button>		</div>
+	</div>
+
+	
+	<div class="text-2xs leading-5 lightgrey mt-1 mb-1">
+		Please note that only <strong>private trade</strong> is allowed. Any transactions are at your own risk! Parfumo does not accept any responsibility for any business transactions carried out here. Contact only users you trust.	</div>
+
+			<div class="flex flex-wrap gap-0-5">
+							<a href="https://www.parfumo.com/s_souk.php?b=Dior&p=Sauvage_Eau_de_Toilette&img=1" class="pbtn pbtn-small pbtn-lightgrey2" rel="nofollow"><img src="https://www.parfumo.com/assets/images/icons/souk_home.svg" alt="Sample"> Entries in Souks <span class="lightgrey text-2xs">&nbsp;23</span></a>
+									<a href="https://www.parfumo.com/Users/testuser/Souk" class="pbtn pbtn-small pbtn-lightgrey2">View My Souk <i class="fa fa-angle-right" aria-hidden="true"></i></a>
+		</div>
+	
+</div>
+
+<script>
+	$('.action_souk_add').click(
+		function() {
+			PModal.close();
+			soukItemPanel(63363, $(this).data('t'));
+		}
+	);
+	$('.action_sharing_add').click(
+		function() {
+			PModal.close();
+			soukSharingPanel(63363);
+		}
+	);
+	$('.action_sharing_edit').click(
+		function() {
+			PModal.close();
+			soukSharingPanel(63363, $(this).data('id'));
+		}
+	);
+</script>

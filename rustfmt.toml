@@ -1,0 +1,3 @@
+# The code is written with long lines; keep them rather than rustfmt's default of 100.
+max_width = 150
+use_small_heuristics = "Max"

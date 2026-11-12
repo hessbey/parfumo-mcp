@@ -1,0 +1,71 @@
+
+<div id="imagery_panel" data-label-ok="Submitted" data-label-failed="Not submitted">
+
+	<h2 class="text-xl">Submit Photo</h2>
+
+			<div data-imagery-consent>
+			<div class="text-sm grey mt-1">I hereby confirm that I am the owner of the photo being submitted, and I grant Parfumo permission to use the photo on its digital platforms and channels.</div>
+			<button type="button" class="pbtn pbtn-small pbtn-blue mt-1" data-imagery-accept>I have read and accepted the rules.</button>
+		</div>
+
+		<div class="hide" data-imagery-upload>
+			<div class="pphotos pphotos-tiles" data-pphotos data-max="3" data-upload-url="/api/perfume/create_imagery" data-id-field="perfume_id" data-file-field="image_file" data-delete-action="" data-delete-field="id" data-label-limit="You can submit up to 3 photos per perfume. Please delete photos before submitting." data-label-failed="" data-label-remove="" data-label-remove-action="" data-label-cancel=""><input type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif" multiple class="hide" data-photo-input><div class="p-placeholder pphotos-drop" role="button" tabindex="0" data-photo-add data-photo-drop><div class="p-placeholder-body"><i class="picon picon-image"></i><div class="text-sm bold grey">Drag photos here</div><div class="text-xs">or choose from your device</div></div></div><div class="hide" data-photo-wrap><div class="pthumbs pthumbs-tiles" data-photo-thumbs><div class="p-placeholder pthumb-add" role="button" tabindex="0" title="Add Photo" data-photo-add><div class="p-placeholder-body"><i class="picon picon-plus-circle-light"></i><div class="text-xs hide-mobile">Add Photo</div></div></div></div></div></div>			<div class="text-xs leading-5 lightgrey mt-2"><strong>Important:</strong> Please read our <a href="/rules/2" target="_blank">photo rules</a> before uploading your images.<br>Uploaded photos are automatically checked for AI generation.</div>
+			<div class="flex flex-end mt-2">
+				<button type="button" class="pbtn pbtn-blue" data-imagery-submit disabled>Submit Photo</button>
+			</div>
+		</div>
+
+		<div class="hide" data-imagery-result>
+			<div class="mt-1" data-imagery-rows></div>
+			<div class="text-xs leading-5 lightgrey mt-2 hide" data-imagery-note><strong>Thank you for submitting your photo for this perfume.</strong><br>We will check your photo and publish it here if suitable. Please not that we cannot provide information on the status of your submission.</div>
+			<div class="flex flex-end mt-2 hide" data-imagery-more>
+				<button type="button" class="pbtn pbtn-lightgrey2">Submit another picture</button>
+			</div>
+		</div>
+	
+</div>
+
+<script>
+	(function() {
+		var root = $('#imagery_panel');
+		var picker = root.find('[data-pphotos]')[0];
+		if (!picker) { return; }
+		var photos = PPhotos.init(picker);
+		var submit = root.find('[data-imagery-submit]');
+
+		root.find('[data-imagery-accept]').on('click', function() {
+			root.find('[data-imagery-consent]').addClass('hide');
+			root.find('[data-imagery-upload]').removeClass('hide');
+		});
+
+		picker.addEventListener('pphotos-change', function() {
+			submit.prop('disabled', photos.count() == 0);
+		});
+
+		submit.on('click', function() {
+			submit.prop('disabled', true).addClass('pm-action-btn--loading');
+			photos.upload(63363).then(function(results) {
+				var rows = root.find('[data-imagery-rows]');
+				var submitted = 0;
+				results.forEach(function(r) {
+					var row = $('<div class="flex vm gap-1 pt-1 pb-1 border-b"><span class="pthumb"><img alt=""></span><div><div class="bold"></div><div class="text-xs grey"></div></div></div>');
+					PPhotos.fallback(row.find('img')[0], URL.createObjectURL(r.file));
+					row.find('.bold').addClass(r.ok ? 'green' : 'pink').text(root.data(r.ok ? 'label-ok' : 'label-failed'));
+					row.find('.grey').html(r.ok ? '' : r.msg);
+					rows.append(row);
+					submitted += r.ok ? 1 : 0;
+				});
+				root.find('[data-imagery-upload]').addClass('hide');
+				root.find('[data-imagery-result]').removeClass('hide');
+				root.find('[data-imagery-note]').toggleClass('hide', submitted == 0);
+				root.find('[data-imagery-more]').toggleClass('hide', submitted >= 3);
+			});
+		});
+
+		root.find('[data-imagery-more] .pbtn').on('click', function() {
+			$.post('/action/perfume/perfume_image_panel.php', { perfume_id: 63363, csrf_key: csrfKey() }, function(html) {
+				root.parent().html(html);
+			});
+		});
+	})();
+</script>

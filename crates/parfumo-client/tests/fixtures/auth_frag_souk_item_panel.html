@@ -1,0 +1,67 @@
+
+<div class="pm-head">
+	<div class="pm-title">Looking for Bottle</div>
+	<div class="flex vm mt-1">
+		<img src="https://media.parfumo.com/perfumes/a2/a28d94-sauvage-eau-de-toilette-dior_1200.jpg?width=240&aspect_ratio=1:1" alt="" class="review-box-img circle">
+		<div>
+			<div class="bold">Sauvage <span class="label_a upper small"> Eau de Toilette</span></div>
+			<div class="text-sm grey">Dior</div>
+		</div>
+	</div>
+</div>
+
+	<form class="sk-panel-form" data-type="normal_need" data-error="Something went wrong. Please try again." novalidate>
+		<input type="hidden" name="p" value="63363">
+		<input type="hidden" name="t" value="normal_need">
+		<input type="hidden" name="souk_id" value="0">
+		<input type="hidden" name="souk_wunsch" value="purchase">
+		<input type="hidden" name="zustand" value="any">
+
+		<div class="p-field" data-field="souk_wunsch">
+			<div class="p-field-label">Souk Option</div>
+			<div class="ptabs-container ptabs-small ptabs-segmented w-100 mb-0 sk-segment" data-segment="souk_wunsch"><nav class="flex ptabs "><div class="active" data-value="purchase" role="button" tabindex="0"><span>Purchase</span></div><div data-value="swap" role="button" tabindex="0"><span>Swap</span></div><div data-value="swap_or_purchase" role="button" tabindex="0"><span>Both</span></div><div data-value="freebie" role="button" tabindex="0"><span>Freebie</span></div></nav></div>		</div>
+
+		<div class="p-field sk-swap-field">
+			<label for="sk_tausch_gegen" class="p-field-label">Exchanging for</label>
+			<input class="uk-input" type="text" name="tausch_gegen" id="sk_tausch_gegen" maxlength="250" value="" placeholder="What would you like to swap for?" autocomplete="off" data-1p-ignore data-lpignore="true" data-form-type="other">
+		</div>
+
+					<div class="p-field" data-field="zustand">
+				<div class="p-field-label">Condition</div>
+				<div class="ptabs-container ptabs-small ptabs-segmented w-100 mb-0 sk-segment" data-segment="zustand"><nav class="flex ptabs "><div data-value="new" role="button" tabindex="0"><span>New</span></div><div data-value="second_hand" role="button" tabindex="0"><span>Second Hand</span></div><div class="active" data-value="any" role="button" tabindex="0"><span>Any</span></div></nav></div>			</div>
+		
+		<div class="p-field">
+			<div class="p-field-cols">
+								<div class="sk-content-field"><label for="sk_ml_inhalt" class="p-field-label">Minimum Content</label><div class="uk-input p-input-affix"><input type="text" name="ml_inhalt" id="sk_ml_inhalt" inputmode="decimal" maxlength="4" value="" autocomplete="off" data-1p-ignore data-lpignore="true" data-form-type="other"><input type="hidden" name="unit" value="ml"><button type="button" class="p-menu-select" title="Unit" aria-haspopup="true" aria-expanded="false" data-ptab-menu="[{&quot;label&quot;:&quot;ml&quot;,&quot;attrs&quot;:{&quot;data-menu-value&quot;:&quot;ml&quot;,&quot;data-menu-label&quot;:&quot;ml&quot;},&quot;active&quot;:true},{&quot;label&quot;:&quot;oz&quot;,&quot;attrs&quot;:{&quot;data-menu-value&quot;:&quot;oz&quot;,&quot;data-menu-label&quot;:&quot;oz&quot;},&quot;active&quot;:false},{&quot;label&quot;:&quot;g&quot;,&quot;attrs&quot;:{&quot;data-menu-value&quot;:&quot;g&quot;,&quot;data-menu-label&quot;:&quot;g&quot;},&quot;active&quot;:false}]" data-ptab-menu-width="120">ml <i class="fa fa-angle-down" aria-hidden="true"></i></button></div></div>
+			</div>
+		</div>
+
+		<div class="p-field">
+			<label for="sk_preisvorstellung" class="p-field-label">Price Expectation</label>
+			<input class="uk-input" type="text" name="preisvorstellung" id="sk_preisvorstellung" maxlength="150" value="" autocomplete="off" data-1p-ignore data-lpignore="true" data-form-type="other">
+		</div>
+
+		<div class="p-field">
+			<label for="sk_versand" class="p-field-label">Shipping</label>
+			<input class="uk-input" type="text" name="versand" id="sk_versand" maxlength="150" value="" placeholder="Shipping costs and processing" autocomplete="off" data-1p-ignore data-lpignore="true" data-form-type="other">
+		</div>
+
+		
+
+		<div class="p-field">
+			<button type="button" class="pbtn-link text-sm" data-more-toggle aria-expanded="false">More details <i class="fa fa-angle-down"></i></button>
+		</div>
+
+		<div class="p-field hide" data-more>
+						<div class="p-field">
+				<label for="sk_notes" class="p-field-label">Notes</label>
+				<textarea class="uk-textarea autosize" name="notes" id="sk_notes" maxlength="250" rows="3"></textarea>
+				<div class="p-field-hint text-xs sk-notes-counter"></div>
+			</div>
+		</div>
+
+		<div class="pm-footer flex flex-end gap-0-5">
+			<button type="button" class="pbtn pbtn-lightgrey2 action_pm_close">Cancel</button>
+			<button type="button" class="pbtn pbtn-blue action_sk_submit">Save</button>
+		</div>
+	</form>

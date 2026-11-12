@@ -1,0 +1,72 @@
+	<table id="ls_popup_results_notes" class="ls_popup_results">
+					<tr>
+				<td>
+					<div class="pad pointer bold" data-name_url="Bergamot" class="pointer bold"><img src="https://media.parfumo.com/notes_png/ab/ab_4bf90f62ca74630b24f6a16079bdee257c7f677b_1200.png?width=40&aspect_ratio=1:1" alt="Bergamot" onerror="this.style.display='none'" class="notes_livesearch_image"> Bergamot</div>
+				</td>
+			</tr>
+					<tr>
+				<td>
+					<div class="pad pointer bold" data-name_url="Italian_bergamot" class="pointer bold"><img src="https://media.parfumo.com/notes_png/ab/ab_4bf90f62ca74630b24f6a16079bdee257c7f677b_1200.png?width=40&aspect_ratio=1:1" alt="Italian bergamot" onerror="this.style.display='none'" class="notes_livesearch_image"> Italian bergamot</div>
+				</td>
+			</tr>
+					<tr>
+				<td>
+					<div class="pad pointer bold" data-name_url="Calabrian_bergamot" class="pointer bold"><img src="https://media.parfumo.com/notes_png/ab/ab_4bf90f62ca74630b24f6a16079bdee257c7f677b_1200.png?width=40&aspect_ratio=1:1" alt="Calabrian bergamot" onerror="this.style.display='none'" class="notes_livesearch_image"> Calabrian bergamot</div>
+				</td>
+			</tr>
+					<tr>
+				<td>
+					<div class="pad pointer bold" data-name_url="Sicilian_bergamot" class="pointer bold"><img src="https://media.parfumo.com/notes_png/ab/ab_4bf90f62ca74630b24f6a16079bdee257c7f677b_1200.png?width=40&aspect_ratio=1:1" alt="Sicilian bergamot" onerror="this.style.display='none'" class="notes_livesearch_image"> Sicilian bergamot</div>
+				</td>
+			</tr>
+					<tr>
+				<td>
+					<div class="pad pointer bold" data-name_url="bergamot-zest" class="pointer bold"><img src="https://media.parfumo.com/notes_png/96/96_99cd805b83cc0d50f6c2245b6ea43f12b282c10e_1200.png?width=40&aspect_ratio=1:1" alt="Bergamot zest" onerror="this.style.display='none'" class="notes_livesearch_image"> Bergamot zest</div>
+				</td>
+			</tr>
+					<tr>
+				<td>
+					<div class="pad pointer bold" data-name_url="Bergamotte_blossom" class="pointer bold"><img src="https://media.parfumo.com/notes_png/31/31_357c97f3fc2a42cfb7850a22eed0c29f3bfa6adf_1200.png?width=40&aspect_ratio=1:1" alt="Bergamot blossom" onerror="this.style.display='none'" class="notes_livesearch_image"> Bergamot blossom</div>
+				</td>
+			</tr>
+					<tr>
+				<td>
+					<div class="pad pointer bold" data-name_url="Bergamot_leaf" class="pointer bold"><img src="https://media.parfumo.com/notes_png/6e/6e_a633b439a010ccc6af51b3de8ae502f48742c0a8_1200.png?width=40&aspect_ratio=1:1" alt="Bergamot leaf" onerror="this.style.display='none'" class="notes_livesearch_image"> Bergamot leaf</div>
+				</td>
+			</tr>
+					<tr>
+				<td>
+					<div class="pad pointer bold" data-name_url="Italian_bergamot_Orpur" class="pointer bold"><img src="https://media.parfumo.com/notes_png/ab/ab_4bf90f62ca74630b24f6a16079bdee257c7f677b_1200.png?width=40&aspect_ratio=1:1" alt="Italian bergamot Orpur®" onerror="this.style.display='none'" class="notes_livesearch_image"> Italian bergamot Orpur®</div>
+				</td>
+			</tr>
+					<tr>
+				<td>
+					<div class="pad pointer bold" data-name_url="Bergamot_tea" class="pointer bold"><img src="https://media.parfumo.com/notes_png/be/be_80ee5addb553e513a6f6276bf0ddd3d4fb639fe9_1200.png?width=40&aspect_ratio=1:1" alt="Bergamot tea" onerror="this.style.display='none'" class="notes_livesearch_image"> Bergamot tea</div>
+				</td>
+			</tr>
+					<tr>
+				<td>
+					<div class="pad pointer bold" data-name_url="calabrian-bergamot-peel" class="pointer bold"><img src="https://media.parfumo.com/notes_png/96/96_99cd805b83cc0d50f6c2245b6ea43f12b282c10e_1200.png?width=40&aspect_ratio=1:1" alt="Calabrian bergamot zest" onerror="this.style.display='none'" class="notes_livesearch_image"> Calabrian bergamot zest</div>
+				</td>
+			</tr>
+			</table>
+
+	<div class="p-1">
+		<button type="button" class="pbtn pbtn-small pbtn-transparent w-100" onclick="hideLsPopup()">Cancel</button>
+	</div>
+
+
+<script>
+	// Keyboard Navigation
+	$(function() {
+		liveSearchKeyNav('#ls_popup_results_notes', '#s_note');
+	});
+
+	$('.ls_popup_results .pad').click(
+		function() {
+			hideLsPopup();
+			location.href = 'https://www.parfumo.com/Fragrance_Note/' + $(this).data('name_url');
+		}
+	);
+
+</script>

@@ -1,0 +1,28 @@
+[package]
+name = "parfumo-mcp-server"
+description = "Remote MCP server for Parfumo over Streamable HTTP: several users, OAuth, Docker image"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+axum = "0.8.9"
+clap = { version = "4.6.7", features = ["derive"] }
+http = "1.5.0"
+parfumo-mcp-core = { version = "0.1.0", path = "../parfumo-mcp-core" }
+parfumo-client = { version = "0.1.0", path = "../parfumo-client" }
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no-provider"] }
+rmcp = { version = "3.9.0", features = ["server", "transport-streamable-http-server"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "signal", "net", "time"] }
+tokio-util = "0.7.20"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["json"] }
+url = "2.5.8"
+
+[dev-dependencies]
+parfumo-mcp-core = { version = "0.1.0", path = "../parfumo-mcp-core", features = ["test-util"] }
+tower = { version = "0.5.3", features = ["util"] }

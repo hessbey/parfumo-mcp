@@ -1,0 +1,114 @@
+
+<h2 class="text-xl">Write Review</h2>
+<div class="text-sm lightgrey mb-2">Please follow our <a href="https://www.parfumo.com/rules/1" target="_blank" class="grey">Rules for Perfume Reviews</a>. For questions or general discussion use the <a href="https://www.parfumo.com/forum" class="grey">Forum</a>.</div>
+
+<form>
+
+	<input type="hidden" name="p" id="form_perfume_id" value="63363">
+
+	<div class="form_review_inputs">
+		<input type="text" class="uk-input form_review_title" name="review_title" autocomplete="off" maxlength="200" placeholder="Title / Summary" value="">
+		<div class="mt-1">
+			<textarea id="parfum-details-review-63363_en" class="plinker uk-textarea autosize autosave form_review_text" name="review_text" maxlength="7500" placeholder="Review..."></textarea>
+		</div>
+	</div>
+
+	<div id="review_validation" class="pink mt-1 mb-1 hide">
+		<span class="bold">The following error(s) occurred:</span>
+		<div id="review_validation_message"></div>
+	</div>
+
+	<div class="review_autosave text-sm pointer mt-0-5"></div>
+
+	<div class="counter-container-review-63363 text-xs leading-6 lightgrey fl"></div>
+
+	<div class="pbtn pbtn-micro pbtn-lightgrey2 mt-0-5 fr" onclick="toggleWithArrows('#yt_holder','.yt-holder-arr')">
+		<i class="fa fa-youtube red" aria-hidden="true"></i> Add YouTube Video <i class="fa fa-angle-down yt-holder-arr"></i>
+	</div>
+
+	<div class="cb"></div>
+
+	<div id="yt_holder" style="display:none;" class="mt-2 mb-2">
+		<div class="text-sm bold mb-0-5">Add my Video Review on YouTube</div>
+		<input type="text" class="uk-input form_review_yt" name="review_youtube_link" autocomplete="off" maxlength="200" value=""><br>
+		<div class="text-xs pink mt-1"><strong>Important:</strong><br>The video must be your own original work and contain a review of the perfume. All videos are checked by Parfumo before they go live. Please enter the <strong>complete link</strong> of your video on YouTube.</div>
+	</div>
+
+	<div class="mt-1 mb-1">
+		<div class="text-lg bold">Scent associations</div>
+		<div class="text-sm lightgrey">What does this perfume remind you of?</div>
+
+		<input id="p-tags-input" type="text" placeholder="Add word...">
+	</div>
+
+	<div class="pbtn-row">
+		<button class="action_submit_review pbtn pbtn-blue" type="button">Post Review</button>
+		<button class="pbtn pbtn-lightgrey2" type="button" onclick="PModal.close()">Cancel</button>
+			</div>
+
+</form>
+
+<script>
+	var pTagsReview = new PTagsInput(document.getElementById('p-tags-input'), {
+		maxChars: 20,
+		maxTags: 6,
+		trimValue: true
+	});
+
+	
+	document.getElementById('p-tags-input').addEventListener('itemAdded', function(e) {
+		updatePerfumeTags('add', 63363, e.detail.item);
+	});
+
+	document.getElementById('p-tags-input').addEventListener('itemRemoved', function(e) {
+		updatePerfumeTags('remove', 63363, e.detail.item);
+	});
+
+	maxlength(document.querySelector('.form_review_text'), document.querySelector('.counter-container-review-63363'));
+
+	
+	$(".action_submit_review").click(function() {
+		postReview();
+	});
+
+	window.pasteHtml = '';
+
+	$('.form_review_text').on('paste', function(e) {
+		var clipboardHtml = (e.originalEvent || e).clipboardData.getData('text/html');
+		if (clipboardHtml && clipboardHtml.length > 0) {
+			window.pasteHtml = clipboardHtml.substring(0, 5000);
+		}
+
+		actionPopup(
+			'⚠️ Warning: AI Generated Text',
+			'Reviews and submissions must be <strong>first-hand and original</strong>. Text from AI sources are NOT permitted. Your account will be <strong>restricted or deleted</strong> if you submit AI generated text.',
+			'Cancel',
+			'I understand',
+			'blue',
+			function() {
+				hideActionPopup();
+			}
+		);
+	});
+
+	$('.action_delete_review').click(function() {
+		var btn = $(this);
+		actionPopup(
+			'Delete Review',
+			'Are you sure you want to delete your Review for this Perfume?',
+			'Cancel',
+			'Delete',
+			'pink',
+			function() {
+				postAction('review/delete_review', {
+					id: btn.data('id'),
+					p: btn.data('p'),
+					h: btn.data('h')
+				}).then(response => response.json()).then(function() {
+					PModal.closeAll();
+					location.reload();
+				});
+			}
+		);
+	});
+</script>

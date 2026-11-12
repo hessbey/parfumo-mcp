@@ -1,0 +1,7 @@
+*.log
+target/
+.env
+*.db
+*.db-*
+data/
+.env.bak*

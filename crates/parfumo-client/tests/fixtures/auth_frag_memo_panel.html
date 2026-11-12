@@ -1,0 +1,71 @@
+
+<div id="memo-perfume-63363" style="display:none;" >
+
+	<div class="yellow-box">
+
+		<div class="pd_options_hide close-icon-sm"></div>
+					<div class="text-xl bold darkyellow fl mb-1">Note on this perfume</div>
+		
+					<div class="text-sm darkyellow memo-date opacity-75 fr mr-1 mb-1">
+							</div>
+		
+		<div class="cb"></div>
+
+		<div id="memo-text-perfume-63363" class="memo-text darkyellow"></div>
+
+		
+		<div class="memo-edit" id="memo-form-perfume-63363" >
+
+			<form onsubmit="addMemo('perfume', 63363, '0123456789abcdef0123456789abcdef', 0); return false;">
+				<textarea class="uk-textarea autosize memo-perfume-63363" placeholder="Note..." id="memo-textarea-perfume-63363" name="memo_text_perfume_63363" data-autosave="memo_perfume_63363" maxlength="5000" style="min-height:140px;"></textarea><br>
+				<div class="review_autosave text-xs lightgrey pointer"></div>
+				<div id="memo-val-perfume-63363" class="text-sm pink leading-6"></div>
+				<div class="counter-container-63363-perfume text-xs leading-6 darkyellow"></div>
+				<button class="pbtn pbtn-blue mt-1" type="submit">Save</button>
+				<button class="pbtn pbtn-grey mt-1 memo_cancel" type="button">Cancel</button>
+			</form>
+
+		</div>
+
+				<div class="action_links_wrapper pbar mb-0"><div role="button" tabindex="0" class="action_link memo_edit hide darkyellow"><i class="picon picon-inline picon-pen-bold"></i> Edit</div><div role="button" tabindex="0" class="action_link memo_del hide darkyellow"><i class="picon picon-inline picon-trash-bold"></i> Delete Note</div><a href="https://www.parfumo.com/account/notebook/perfume" class="action_link darkyellow pbar-right">Notebook <i class="picon picon-inline picon-chevron-right"></i></a></div>
+	</div>
+
+	
+</div>
+
+<script>$("#memo-perfume-63363").show();</script>setTimeZone('0123456789abcdef0123456789abcdef');<script>
+		maxlength(document.querySelector('.memo-perfume-63363'), document.querySelector('.counter-container-63363-perfume'));
+	</script><script>
+	$(".memo_del").click(function() {
+		actionPopup(
+			'Delete Note',
+			'Are you sure you want to delete this note?',
+			'Cancel',
+			'Delete',
+			'pink',
+			function() {
+				deleteMemo(63363, 'perfume', '0123456789abcdef0123456789abcdef');
+				hideActionPopup();
+							}
+		)
+	});
+
+	$(".memo_edit").click(function() {
+		$('#memo-form-perfume-63363').toggle();
+		$('#memo-text-perfume-63363').toggle();
+	});
+
+	autoSave(document.getElementById('memo-textarea-perfume-63363'));
+
+	$(".memo_cancel").click(function() {
+		if ($('#memo-text-perfume-63363').html() == '' ||
+			$('.memo-perfume-63363').html() == '') {
+			$('#memo-perfume-63363').slideUp('fast');
+
+		} else {
+			$('#memo-form-perfume-63363').toggle();
+			$('#memo-text-perfume-63363').toggle();
+		}
+	});
+
+</script>

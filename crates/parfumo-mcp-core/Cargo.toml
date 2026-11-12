@@ -1,0 +1,38 @@
+[package]
+name = "parfumo-mcp-core"
+description = "The Parfumo MCP tools and what they need: Parfumo sessions, storage, audit log, public-write guard rails"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+aes-gcm = "0.11.1"
+base64 = "0.23.1"
+hex = "0.4.3"
+http = "1.5.0"
+parfumo-client = { version = "0.1.0", path = "../parfumo-client" }
+rand = "0.10.3"
+rmcp = { version = "3.9.0", features = ["server", "macros", "schemars"] }
+rusqlite = { version = "0.42.0", features = ["bundled"] }
+schemars = "1.2.3"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.11.1"
+subtle = "2.6.1"
+thiserror = "2.0.21"
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "time"] }
+tracing = "0.1.44"
+url = "2.5.8"
+# Only for the stand-in site of `testing` (feature `test-util`).
+axum = { version = "0.8.9", optional = true }
+
+[features]
+# Test support (in-memory database, in-process tool calls, stand-in for parfumo.com) for
+# the tests of the binaries built on this library.
+test-util = ["dep:axum", "tokio/net", "tokio/io-util"]
+
+[dev-dependencies]
+axum = "0.8.9"
+tokio = { version = "1.54.1", features = ["net", "io-util"] }
