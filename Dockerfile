@@ -17,8 +17,11 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
  && /parfumo-mcp-server --version
 
 FROM alpine:3
+# `source` links the published image to the repository: GitHub then lists it on the
+# repository page.
 LABEL org.opencontainers.image.title="parfumo-mcp-server" \
       org.opencontainers.image.description="Remote MCP server for Parfumo (Streamable HTTP)" \
+      org.opencontainers.image.source="https://github.com/hessbey/parfumo-mcp" \
       org.opencontainers.image.licenses="MIT"
 RUN apk add --no-cache ca-certificates \
  && addgroup -S -g 10001 parfumo \
