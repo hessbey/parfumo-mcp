@@ -253,8 +253,8 @@ les paquets déjà publiés sont sautés. Elle s'authentifie de deux façons :
 systèmes, que personne ne tape, sont publiés sous le compte npm du projet (`@hessbey/…`) : à
 la version 0.2.1 ils portaient des noms nus, et npm a accepté les quatre paquets Linux et
 macOS puis refusé `parfumo-mcp-win32-x64` (« Package name triggered spam detection »), si
-bien que le paquet principal n'est jamais sorti. Ces quatre paquets orphelins de la 0.2.1 ne
-servent à rien et peuvent être marqués obsolètes (`npm deprecate`).
+bien que le paquet principal n'est jamais sorti. Ces quatre paquets orphelins de la 0.2.1 ont
+été supprimés de npm le jour même.
 
 Une copie du paquet principal est publiée sous le nom `@hessbey/parfumo-mcp`, juste avant
 lui. Si npm refusait aussi le nom nu, l'étape échouerait, mais `npx -y @hessbey/parfumo-mcp`
