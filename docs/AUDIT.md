@@ -47,6 +47,32 @@ journaux relus.
 | Test canari quotidien sur un compte de test | Tenu | `canary.rs` ; 48 contrôles `ok` sur le vrai site le 12 novembre 2026 |
 | `User-Agent` fixe et honnête | Tenu | `transport.rs` |
 
+## 2 ter. Changement postérieur à l'audit : la page de connexion du binaire local
+
+Depuis la version 0.2, le binaire local `parfumo-mcp` ouvre une page de connexion sur
+l'ordinateur de l'utilisateur, au lieu de lire le compte dans la configuration du client MCP.
+Cette page n'a pas été relue par un tiers. Ce qui la protège, et le test qui le vérifie
+(`crates/parfumo-mcp/tests/stdio.rs`, `the_login_page_links_an_account_without_any_setting`) :
+
+- Elle n'écoute que sur `127.0.0.1`, sur un port choisi par le système, et seulement dix
+  minutes ou jusqu'à ce qu'un compte soit relié. Rien n'écoute le reste du temps.
+- Son adresse contient un secret de 256 bits, renouvelé à chaque ouverture et comparé en
+  temps constant. Toute autre adresse reçoit une réponse 404 vide.
+- Elle ne répond qu'à son propre nom (`127.0.0.1:<port>` ou `localhost:<port>`) : un nom de
+  domaine qu'un site ferait pointer vers l'ordinateur (réattribution DNS) est refusé.
+- Un formulaire envoyé depuis un autre site (en-tête `Origin` étranger) est refusé, et rien
+  n'est transmis à Parfumo.
+- Mêmes en-têtes que les pages du serveur HTTP : aucun script, aucune ressource externe,
+  aucune mise en cadre, aucune mise en cache.
+- Le secret de l'adresse n'est pas journalisé. Le mot de passe et le cookie de session ne
+  figurent ni sur la sortie standard, ni dans les journaux, ni en clair sur le disque.
+
+Limite connue : l'adresse passe par la conversation, puisque c'est l'assistant qui la donne.
+Elle ne mène qu'au formulaire : elle ne permet pas de lire ce qui est stocké. Celui qui la
+connaît et peut joindre `127.0.0.1` sur cet ordinateur — donc un programme déjà présent sur
+la machine — pourrait, pendant ces dix minutes, relier un autre compte ou délier le compte.
+Un tel programme peut de toute façon lire les fichiers locaux de l'utilisateur.
+
 ## 2 bis. Changement postérieur à l'audit : une clé d'accès par utilisateur
 
 Après cet audit, le nom d'utilisateur et le mot de passe du serveur ont été supprimés.

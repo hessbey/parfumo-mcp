@@ -133,7 +133,8 @@ impl TestApp {
         let mut sessions = self.sessions.lock().await;
         if !sessions.contains_key(bearer) {
             let user = self.state.db.user_by_bearer_hash(&crypto::token_hash(bearer)).unwrap().expect("unknown bearer token");
-            sessions.insert(bearer.to_string(), Session::open(ParfumoTools::local(self.state.clone(), user)).await);
+            sessions
+                .insert(bearer.to_string(), Session::open(ParfumoTools::local(self.state.clone(), user, crate::tools::LinkHow::Environment)).await);
         }
         sessions.get_mut(bearer).unwrap().request(method, params).await
     }

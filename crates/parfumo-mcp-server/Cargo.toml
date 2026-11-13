@@ -11,8 +11,8 @@ rust-version.workspace = true
 axum = "0.8.9"
 clap = { version = "4.6.7", features = ["derive"] }
 http = "1.5.0"
-parfumo-mcp-core = { version = "0.1.0", path = "../parfumo-mcp-core" }
-parfumo-client = { version = "0.1.0", path = "../parfumo-client" }
+parfumo-mcp-core = { version = "0.2.0", path = "../parfumo-mcp-core" }
+parfumo-client = { version = "0.2.0", path = "../parfumo-client" }
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no-provider"] }
 rmcp = { version = "3.9.0", features = ["server", "transport-streamable-http-server"] }
 serde = { version = "1.0.229", features = ["derive"] }
@@ -24,5 +24,5 @@ tracing-subscriber = { version = "0.3.23", features = ["json"] }
 url = "2.5.8"
 
 [dev-dependencies]
-parfumo-mcp-core = { version = "0.1.0", path = "../parfumo-mcp-core", features = ["test-util"] }
+parfumo-mcp-core = { version = "0.2.0", path = "../parfumo-mcp-core", features = ["test-util"] }
 tower = { version = "0.5.3", features = ["util"] }

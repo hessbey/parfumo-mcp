@@ -14,6 +14,35 @@ Synthèse à jour, en anglais : [`STATUS.md`](STATUS.md).
 > serveur HTTP puis vérifie sa taille (moins de 50 Mo), son démarrage et sa mémoire au repos
 > (`scripts/check-image.sh`). Reste non prouvé : `docker compose up` sur un VPS, derrière Caddy.
 
+## État de la page de connexion locale (version 0.2) : prouvé, non prouvé
+
+Relevé du 13 novembre 2026. Le binaire local `parfumo-mcp` ne demande plus de variable
+d'environnement : il ouvre une page de connexion sur `127.0.0.1` quand un outil a besoin du
+compte, ou sur demande avec `parfumo-mcp login`. Le formulaire et ses actions sont ceux de la
+page `/link` du serveur HTTP, déplacés dans la bibliothèque `parfumo-mcp-core`.
+
+### Prouvé
+
+| Point | Preuve |
+| --- | --- |
+| Tests | `cargo test --workspace` : 207 tests, 0 échec, sans réseau. `cargo clippy --workspace --all-targets -- -D warnings` : propre |
+| Liaison sans aucun réglage | Test sur le vrai binaire, face à un faux site : sans compte, l'erreur `not_linked` donne l'adresse de la page ; le formulaire relie le compte ; le serveur en cours l'utilise aussitôt ; un redémarrage sans variable garde le compte et sa session, sans nouvelle connexion |
+| Protections de la page | Même test : autre adresse, autre nom d'hôte et formulaire venu d'un autre site refusés sans rien envoyer à Parfumo ; mêmes en-têtes que `/link` ; la page se ferme une fois le compte relié et avec le serveur ; le secret de l'adresse n'est pas journalisé |
+| `login` et `logout` | Test : `parfumo-mcp login` relie un compte pour un serveur déjà lancé, sans redémarrage ; un second compte relié de la même façon remplace la session que le serveur gardait en mémoire ; `logout` efface le compte, y compris pour un serveur lancé ; `login` refuse quand le compte vient de l'environnement |
+| Comptes de l'environnement | Les tests existants passent inchangés : un compte donné par les variables garde la priorité, et il est effacé quand elles disparaissent. Un compte relié sur la page ne l'est pas |
+| Base de la version 0.1 | Test : une base sans les deux nouvelles colonnes du lien est mise à niveau à l'ouverture et garde son compte |
+| Vrai navigateur | Chromium piloté contre le vrai binaire (`parfumo-mcp login --no-browser`) et un faux site : changement de langue, mauvais mot de passe refusé, bouton « Tester » sous « Plus d'options », bon mot de passe accepté, page de fin sans formulaire, commande terminée avec le code 0. En-tête `Origin` envoyé par le navigateur : `http://127.0.0.1:<port>` |
+
+### Non prouvé
+
+- **Aucun vrai compte Parfumo** n'a été relié par cette page : seulement le faux site. Le
+  code de connexion est celui de `/link`, prouvé en direct.
+- **Aucun vrai client MCP** n'a transmis l'adresse de la page à un utilisateur.
+- **Ouverture du navigateur** (`open`, `xdg-open`, `cmd /C start`) : jamais essayée, les
+  tests utilisent `--no-browser`. Sans navigateur, l'adresse reste affichée.
+- **Windows et macOS** : la page n'a tourné que sous Linux ; l'intégration continue y passe
+  les mêmes tests.
+
 ## État du binaire stdio : prouvé, non prouvé
 
 Relevé du 12 novembre 2026, même conteneur de développement. `parfumo-mcp-stdio` n'ajoute

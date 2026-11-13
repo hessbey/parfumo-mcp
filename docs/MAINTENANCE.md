@@ -176,7 +176,7 @@ curl https://<votre-domaine>/healthz
 ```
 
 Le serveur utilise l'image publiée `ghcr.io/hessbey/parfumo-mcp-server`. Sans réglage, c'est
-la dernière version ; `PARFUMO_MCP_VERSION=0.1.1` dans `.env` en fige une, et la mise à jour
+la dernière version ; `PARFUMO_MCP_VERSION=0.2.0` dans `.env` en fige une, et la mise à jour
 consiste alors à changer ce numéro avant les commandes ci-dessus. Pour une image construite
 soi-même, voir [HOSTING.md](HOSTING.md#install).
 
@@ -199,7 +199,7 @@ autorisation : le client légitime doit alors se reconnecter. C'est voulu.
 sort pas du réseau Docker.
 
 **Surveillance.** `GET /healthz` répond 200 tant que la base répond, et donne le dernier
-verdict du canari : `{"canary":{"at":…,"status":"ok"},"status":"ok","version":"0.1.1"}`. Le
+verdict du canari : `{"canary":{"at":…,"status":"ok"},"status":"ok","version":"0.2.0"}`. Le
 verdict du canari ne fait jamais échouer le contrôle de santé : un conteneur ne doit pas
 redémarrer parce que Parfumo a changé une page.
 
@@ -214,8 +214,8 @@ Une version se publie en poussant un tag. Le reste est automatique
 2. Poser le tag du même numéro, précédé de `v`, et le pousser :
 
    ```sh
-   git tag v0.1.0
-   git push origin v0.1.0
+   git tag v0.2.0
+   git push origin v0.2.0
    ```
 
    Le tag doit correspondre exactement à la version de `Cargo.toml`, sinon la publication

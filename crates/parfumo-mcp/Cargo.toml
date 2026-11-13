@@ -1,6 +1,6 @@
 [package]
 name = "parfumo-mcp"
-description = "Local MCP server for Parfumo over stdio: one Parfumo account, read from the environment"
+description = "Local MCP server for Parfumo over stdio: one Parfumo account, linked on a local login page"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,11 +8,14 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+# Only for the login page, which listens on 127.0.0.1 while an account is being linked.
+axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio", "form", "query"] }
 clap = { version = "4.6.7", features = ["derive"] }
 # The 48 tools, the Parfumo session, the cache and the audit log.
-parfumo-mcp-core = { version = "0.1.0", path = "../parfumo-mcp-core" }
+parfumo-mcp-core = { version = "0.2.0", path = "../parfumo-mcp-core" }
 rmcp = { version = "3.9.0", features = ["server", "transport-io"] }
-tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "signal", "time", "io-std"] }
+serde = { version = "1.0.229", features = ["derive"] }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "signal", "time", "io-std", "net", "sync"] }
 tracing = "0.1.44"
 tracing-subscriber = "0.3.23"
 

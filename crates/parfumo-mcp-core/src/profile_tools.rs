@@ -193,8 +193,10 @@ pub struct SessionStatusOutput {
     /// Last login of the server on Parfumo (UTC).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_login_at: Option<String>,
-    /// Page of this server where the user links or relinks the account. Absent on the local
-    /// stdio server, where the account comes from the environment of the process.
+    /// Page where the user links or relinks the account: the `/link` page of an HTTP server,
+    /// or the login page a local stdio server opens on the user's own computer when the
+    /// account has to be linked. Absent when there is nothing to link, or when the account
+    /// of a local server comes from the environment of the process.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub link_url: Option<String>,
     /// Whether this server sends publicly visible writes at all; when false they are dry runs.
@@ -659,7 +661,7 @@ impl ParfumoTools {
         let cfg = &self.state.cfg;
         let sessions = &self.state.sessions;
         let outcome = async {
-            let info = sessions.link_info(user.id).map_err(|e| ToolError::from_session(e, &self.link_url()))?;
+            let info = sessions.link_info(user.id).map_err(|e| self.session_err(e))?;
             let (mut session, mut nick) = ("not_linked".to_string(), None);
             if info.is_some() {
                 session = match sessions.account_client(user.id).await {
@@ -679,6 +681,7 @@ impl ParfumoTools {
                 }
                 .to_string();
             }
+            let link_url = self.status_link_page(matches!(session.as_str(), "not_linked" | "reauth_required" | "captcha_required"));
             let out = SessionStatusOutput {
                 linked: info.is_some(),
                 mode: info.as_ref().map(|i| i.mode.clone()),
@@ -686,7 +689,7 @@ impl ParfumoTools {
                 nick,
                 linked_at: info.as_ref().map(|i| iso(i.linked_at)),
                 last_login_at: info.as_ref().and_then(|i| i.last_login_at).map(iso),
-                link_url: self.link_page(),
+                link_url,
                 public_writes_enabled: cfg.public_writes,
                 quotas: self.quotas(user.id),
                 quotas_reset_in_secs: public_gate::secs_to_reset(),

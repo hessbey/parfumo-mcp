@@ -23,7 +23,7 @@ blogs, Souk).
 
   | Binary | Transport | For |
   | --- | --- | --- |
-  | `parfumo-mcp` | stdio | One person, on their own machine. No port, no OAuth, nothing to host |
+  | `parfumo-mcp` | stdio | One person, on their own machine. Nothing to host, no OAuth |
   | `parfumo-mcp-server` | Streamable HTTP | Several people, isolated accounts, on a server behind HTTPS (Docker image) |
 
 - **Safe by default.** Every write tool supports `dry_run` and reads the real state back.
@@ -36,9 +36,9 @@ blogs, Souk).
   solving, no Cloudflare bypass.
 - **Targets `www.parfumo.com`, the English site.** The German site `www.parfumo.de` uses
   different URLs and labels and is not supported.
-- **Secrets stay out of the conversation.** Credentials come from the environment (stdio) or
-  a `/link` web page (HTTP), are encrypted at rest with AES-256-GCM, and never appear in
-  logs, errors or tool results.
+- **Secrets stay out of the conversation.** Credentials are typed on a login page — on your
+  own computer (stdio) or on the server's `/link` page (HTTP) — are encrypted at rest with
+  AES-256-GCM, and never appear in logs, errors or tool results.
 
 ## Quick start (local)
 
@@ -49,9 +49,7 @@ yourself instead, see [Local usage](docs/LOCAL.md#install).
 Add it to Claude Code:
 
 ```sh
-claude mcp add parfumo \
-  -e PARFUMO_COOKIE='pf_auth=…' \
-  -- /path/to/parfumo-mcp
+claude mcp add parfumo -- /path/to/parfumo-mcp
 ```
 
 Or to any client configured with a JSON file (Claude Desktop and most others):
@@ -59,17 +57,15 @@ Or to any client configured with a JSON file (Claude Desktop and most others):
 ```json
 {
   "mcpServers": {
-    "parfumo": {
-      "command": "/path/to/parfumo-mcp",
-      "env": { "PARFUMO_COOKIE": "pf_auth=…" }
-    }
+    "parfumo": { "command": "/path/to/parfumo-mcp" }
   }
 }
 ```
 
-`PARFUMO_COOKIE` is the `pf_auth` cookie copied from a browser logged in to Parfumo. You can
-use `PARFUMO_USER` and `PARFUMO_PASSWORD` instead, or neither: without an account the public
-tools still work. Details: [Local usage](docs/LOCAL.md).
+That is all: the public tools work at once. The first time a tool needs your Parfumo
+account, the assistant gives you the link of a login page on your own computer; or open it
+yourself with `parfumo-mcp login`. Your password is typed there, never in the conversation,
+and is stored encrypted on your computer. Details: [Local usage](docs/LOCAL.md).
 
 To host it for several people, see [Hosting](docs/HOSTING.md): the server is published as a
 Docker image, `ghcr.io/hessbey/parfumo-mcp-server`.

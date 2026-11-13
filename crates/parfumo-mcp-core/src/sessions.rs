@@ -114,6 +114,10 @@ pub struct Sessions {
     /// Users whose last probe or re-login met a captcha or an outage: no new attempt
     /// before the instant given, so that a refusal is never hammered.
     backoff: Mutex<HashMap<i64, (std::time::Instant, SessionError)>>,
+    /// The `rev` of the link each in-memory session belongs to. Another process may link
+    /// a different account (`parfumo-mcp login` next to a running stdio server): the
+    /// session kept here is then dropped instead of acting for the previous account.
+    link_revs: Mutex<HashMap<i64, String>>,
 }
 
 fn aad(user_id: i64, kind: &str) -> String {
@@ -134,7 +138,25 @@ impl Sessions {
             verified: Mutex::new(HashMap::new()),
             relogin: Mutex::new(HashMap::new()),
             backoff: Mutex::new(HashMap::new()),
+            link_revs: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Drops what is kept in memory for `user_id` when it belongs to another link than the
+    /// one now stored (`rev`), or to a link that is gone (`None`).
+    fn follow_link(&self, user_id: i64, rev: Option<&str>) {
+        let mut revs = self.link_revs.lock().unwrap_or_else(|p| p.into_inner());
+        if revs.get(&user_id).map(String::as_str) == rev {
+            return;
+        }
+        match rev {
+            Some(rev) => revs.insert(user_id, rev.to_string()),
+            None => revs.remove(&user_id),
+        };
+        drop(revs);
+        self.clients.lock().unwrap_or_else(|p| p.into_inner()).remove(&user_id);
+        self.forget_verified(user_id);
+        self.backoff.lock().unwrap_or_else(|p| p.into_inner()).remove(&user_id);
     }
 
     fn new_client(&self, user_id: i64, cached: bool) -> Result<ParfumoClient, SessionError> {
@@ -195,7 +217,9 @@ impl Sessions {
     /// Logged-in client for an account tool. `not_linked` without a link; otherwise the
     /// session is probed (and renewed if needed) unless it was checked recently.
     pub async fn account_client(&self, user_id: i64) -> Result<ParfumoClient, SessionError> {
-        if self.db.link_get(user_id).map_err(internal)?.is_none() {
+        let link = self.db.link_get(user_id).map_err(internal)?;
+        self.follow_link(user_id, link.as_ref().map(|l| l.rev.as_str()));
+        if link.is_none() {
             return Err(SessionError::NotLinked);
         }
         let fresh = self.verified.lock().unwrap_or_else(|p| p.into_inner()).get(&user_id).is_some_and(|t| t.elapsed() < SESSION_TRUST);
@@ -241,7 +265,8 @@ impl Sessions {
         self.new_client(user_id, false)
     }
 
-    fn replace_client(&self, user_id: i64, client: ParfumoClient) {
+    fn replace_client(&self, user_id: i64, client: ParfumoClient, rev: String) {
+        self.link_revs.lock().unwrap_or_else(|p| p.into_inner()).insert(user_id, rev);
         self.forget_verified(user_id);
         self.backoff.lock().unwrap_or_else(|p| p.into_inner()).remove(&user_id);
         self.clients.lock().unwrap_or_else(|p| p.into_inner()).insert(user_id, client);
@@ -264,9 +289,9 @@ impl Sessions {
         login_with_retries(&client, &creds, self.cfg.user_min_interval * 2).await?;
         let secret = self.key.encrypt(&serde_json::to_vec(&creds).map_err(internal)?, &aad(user_id, "credentials")).map_err(internal)?;
         let cookies = self.encrypt_cookies(user_id, &client)?;
-        self.db.link_put(user_id, "credentials", Some(&secret), Some(&cookies), "linked").map_err(internal)?;
+        let rev = self.db.link_put(user_id, "credentials", Some(&secret), Some(&cookies), "linked").map_err(internal)?;
         self.db.link_update_session(user_id, Some(&cookies), "linked", true).map_err(internal)?;
-        self.replace_client(user_id, client);
+        self.replace_client(user_id, client, rev);
         Ok(())
     }
 
@@ -280,13 +305,14 @@ impl Sessions {
         let logged_in = client.is_logged_in().await.unwrap_or(false);
         let cookies = self.encrypt_cookies(user_id, &client)?;
         let status = if logged_in { "linked" } else { "unverified" };
-        self.db.link_put(user_id, "cookie", None, Some(&cookies), status).map_err(internal)?;
-        self.replace_client(user_id, client);
+        let rev = self.db.link_put(user_id, "cookie", None, Some(&cookies), status).map_err(internal)?;
+        self.replace_client(user_id, client, rev);
         Ok(logged_in)
     }
 
     /// Erases credentials and cookies, and drops the in-memory session.
     pub fn unlink(&self, user_id: i64) -> Result<bool, SessionError> {
+        self.link_revs.lock().unwrap_or_else(|p| p.into_inner()).remove(&user_id);
         self.clients.lock().unwrap_or_else(|p| p.into_inner()).remove(&user_id);
         self.forget_verified(user_id);
         self.backoff.lock().unwrap_or_else(|p| p.into_inner()).remove(&user_id);
@@ -296,7 +322,9 @@ impl Sessions {
     /// Returns a logged-in client, re-logging in when the session expired (credentials mode).
     /// Needed by account tools (jalons 2+); in jalon 1 it backs the "test session" button.
     pub async fn ensure_logged_in(&self, user_id: i64) -> Result<ParfumoClient, SessionError> {
-        let link = self.db.link_get(user_id).map_err(internal)?.ok_or(SessionError::NotLinked)?;
+        let link = self.db.link_get(user_id).map_err(internal)?;
+        self.follow_link(user_id, link.as_ref().map(|l| l.rev.as_str()));
+        let link = link.ok_or(SessionError::NotLinked)?;
         // Parfumo already refused this link: nothing is sent, not even a probe, until the
         // user links the account again on /link (which resets the status).
         if matches!(link.status.as_str(), STATUS_REAUTH | STATUS_EXPIRED) {
@@ -356,8 +384,14 @@ impl Sessions {
 pub const ENV_LOCAL_USER: &str = "PARFUMO_USER";
 pub const ENV_LOCAL_PASSWORD: &str = "PARFUMO_PASSWORD";
 pub const ENV_LOCAL_COOKIE: &str = "PARFUMO_COOKIE";
-/// How the account is (re)linked on the stdio server, as the end of a sentence.
+/// How the account is (re)linked on the stdio server when it comes from the environment,
+/// as the end of a sentence.
 pub const LOCAL_LINK_HOW: &str = "by setting PARFUMO_USER and PARFUMO_PASSWORD (or PARFUMO_COOKIE, the `pf_auth=…` cookie of a browser logged in to Parfumo) in the environment of this local MCP server, in the MCP client's configuration, and restarting it";
+/// The same when the stdio server has a login page but could not open it now.
+pub const LOCAL_LOGIN_HOW: &str = "by running `parfumo-mcp login` in a terminal on the computer where this local MCP server runs";
+/// What follows the address of the local login page in a message to the assistant.
+pub const LOCAL_PAGE_NOTE: &str =
+    "a page of this local MCP server, on the user's own computer, open for ten minutes; give the user this exact link to open in their browser";
 
 /// The single Parfumo account of the stdio server, as read from its environment.
 #[derive(Clone, PartialEq, Eq)]
@@ -398,12 +432,14 @@ impl Sessions {
     ///
     /// An unchanged account keeps its stored session and its status: the cookies of the
     /// last run are reused instead of logging in at every start, and credentials Parfumo
-    /// refused are not sent again until they change. A different account, or none,
-    /// replaces or erases the stored one. Returns whether the stored link changed.
+    /// refused are not sent again until they change. A different account replaces the
+    /// stored one. Without an account in the environment, the one a previous start took
+    /// from it is erased, and one linked on the local login page is kept. Returns whether
+    /// the stored link changed.
     pub fn sync_local_link(&self, user_id: i64, account: Option<&LocalAccount>) -> Result<bool, SessionError> {
         let stored = self.db.link_get(user_id).map_err(internal)?;
         let Some(account) = account else {
-            return if stored.is_some() { self.unlink(user_id) } else { Ok(false) };
+            return if stored.is_some_and(|link| link.from_env) { self.unlink(user_id) } else { Ok(false) };
         };
         let (mode, source) = match account {
             LocalAccount::Credentials(creds) => ("credentials", serde_json::to_vec(creds).map_err(internal)?),
@@ -416,6 +452,8 @@ impl Sessions {
                 && link.secret.as_ref().and_then(|blob| self.key.decrypt(blob, &aad(user_id, kind)).ok()).is_some_and(|plain| plain == source)
         });
         if same {
+            // A database of version 0.1 does not say where its account came from.
+            self.db.link_mark_from_env(user_id).map_err(internal)?;
             return Ok(false);
         }
         let secret = self.key.encrypt(&source, &aad(user_id, kind)).map_err(internal)?;
@@ -434,7 +472,9 @@ impl Sessions {
         self.clients.lock().unwrap_or_else(|p| p.into_inner()).remove(&user_id);
         self.forget_verified(user_id);
         self.backoff.lock().unwrap_or_else(|p| p.into_inner()).remove(&user_id);
-        self.db.link_put(user_id, mode, Some(&secret), cookies.as_deref(), "linked").map_err(internal)?;
+        let rev = self.db.link_put(user_id, mode, Some(&secret), cookies.as_deref(), "linked").map_err(internal)?;
+        self.db.link_mark_from_env(user_id).map_err(internal)?;
+        self.link_revs.lock().unwrap_or_else(|p| p.into_inner()).insert(user_id, rev);
         Ok(true)
     }
 }

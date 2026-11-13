@@ -4,7 +4,7 @@
 
 For one person, on their own machine. The MCP client (Claude Code, Claude Desktop…) starts
 `parfumo-mcp` and talks to it over standard input and output. Nothing listens on the
-network.
+network, apart from a login page on `127.0.0.1` while you link your account.
 
 ## Install
 
@@ -36,35 +36,12 @@ cargo build --release -p parfumo-mcp
 # binary: target/release/parfumo-mcp (about 10 MB)
 ```
 
-## Give it a Parfumo account
-
-One account, read from the process environment. Nothing is ever typed into the conversation
-with the assistant.
-
-| Variable | Mode |
-| --- | --- |
-| `PARFUMO_COOKIE` | **Cookie mode**, no password: the `pf_auth=…` value copied from a browser logged in to Parfumo (the whole `Cookie` header works too). When it expires, tools return `reauth_required` and you copy a new one. Clicking "Logout" in that browser revokes the cookie |
-| `PARFUMO_USER` and `PARFUMO_PASSWORD` | **Credentials mode.** The binary logs in the first time a tool needs the account, keeps the session between runs, and logs in again by itself when it expires (three attempts at most, then `reauth_required`) |
-
-The two modes are exclusive: with both, or with half of the credentials pair, the binary
-refuses to start and says why. **With neither, it still starts**: the public tools
-(database, forum, blogs, Souk, profiles) work, and account tools return `not_linked`.
-
-If Parfumo rejects the password, the binary never sends it again — even after a restart —
-until the variable changes. It never solves a captcha: if Parfumo shows one, the tool
-returns `captcha_required` and the way out is cookie mode.
-
-A password written in the client's configuration is stored there in clear text. That is a
-reason to prefer cookie mode.
-
 ## Connect a client
 
 Claude Code:
 
 ```sh
-claude mcp add parfumo \
-  -e PARFUMO_COOKIE='pf_auth=…' \
-  -- /path/to/parfumo-mcp
+claude mcp add parfumo -- /path/to/parfumo-mcp
 ```
 
 Clients configured with a JSON file (Claude Desktop and most others):
@@ -72,19 +49,77 @@ Clients configured with a JSON file (Claude Desktop and most others):
 ```json
 {
   "mcpServers": {
-    "parfumo": {
-      "command": "/path/to/parfumo-mcp",
-      "env": { "PARFUMO_USER": "my-nickname", "PARFUMO_PASSWORD": "my-password" }
-    }
+    "parfumo": { "command": "/path/to/parfumo-mcp" }
   }
 }
 ```
+
+There is nothing else to set. The public tools (database, forum, blogs, Souk, profiles) work
+at once; the tools that act on your account answer `not_linked` until you link it.
 
 Check it with MCP Inspector, no account needed:
 
 ```sh
 npx @modelcontextprotocol/inspector --cli target/release/parfumo-mcp --method tools/list
 ```
+
+## Link your Parfumo account
+
+The account is linked on a page of your own computer. Nothing is typed into the conversation
+with the assistant, and nothing is written in the client's configuration.
+
+- **From the assistant.** The first time a tool needs the account, the assistant receives
+  the address of the login page, `http://127.0.0.1:<port>/<secret>`, and passes it on. Open
+  it, enter your Parfumo nickname and password, tick the box, then ask again.
+- **From a terminal.** `parfumo-mcp login` opens the same page in your browser
+  (`--no-browser` only prints its address). A client that is already running the program
+  finds the account at its next tool call, without a restart.
+
+The page is in English, French or German. Its main form is **credentials mode**: the
+program logs in, keeps the session between runs, and logs in again by itself when it expires
+(three attempts at most, then `reauth_required`). Under "More options":
+
+- **Cookie mode**, no password: paste the `pf_auth=…` value copied from a browser logged in
+  to Parfumo (the whole `Cookie` header works too). When it expires, tools return
+  `reauth_required` and you paste a new one. Clicking "Logout" in that browser revokes it.
+- **Test** the link, or **unlink** the account. `parfumo-mcp logout` unlinks it too.
+
+If Parfumo rejects the password, the program never sends it again — even after a restart —
+until you link the account again. It never solves a captcha: if Parfumo shows one, the tool
+returns `captcha_required` and the way out is cookie mode.
+
+What the page is, and is not:
+
+- It listens on `127.0.0.1` only, on a port the system picks, and only while it is needed:
+  ten minutes, or until an account is linked. Each opening has a new address.
+- The address holds a random secret. The page answers no other address, no other host name,
+  and no form sent from another site; it runs no script and loads nothing from the network.
+- The address goes through the conversation, since the assistant shows it. It leads to the
+  form, never to what is stored: knowing it does not reveal a password or a cookie.
+- It only works when the browser and the program are on the same computer. If the program
+  runs elsewhere (a remote machine, a container), use the environment instead.
+
+### Or from the environment
+
+The account can also be given by the environment of the process, for a setup without a
+browser:
+
+| Variable | Mode |
+| --- | --- |
+| `PARFUMO_COOKIE` | **Cookie mode**: the `pf_auth=…` value, or the whole `Cookie` header |
+| `PARFUMO_USER` and `PARFUMO_PASSWORD` | **Credentials mode** |
+
+```sh
+claude mcp add parfumo -e PARFUMO_COOKIE='pf_auth=…' -- /path/to/parfumo-mcp
+```
+
+The two modes are exclusive: with both, or with half of the credentials pair, the program
+refuses to start and says why. An account of the environment takes precedence: the login
+page is not offered and `parfumo-mcp login` refuses to run. Change the variables to change
+the account; remove them and the account they gave is erased at the next start.
+
+A password written in the client's configuration is stored there in clear text. That is a
+reason to prefer the login page, or cookie mode.
 
 ## Settings
 
@@ -106,8 +141,8 @@ effect here.
   first run in the neighbouring file `parfumo-mcp.db.key`. Both files are readable only by
   their owner (mode 600). The key sits on the same disk as the database: this protection is
   worth the file permissions, no more. Deleting both files resets everything.
-- To switch accounts, change or remove the variables: on the next start the stored account
-  is replaced or erased.
+- To switch accounts, link another one on the login page; `parfumo-mcp logout` erases the
+  stored one.
 - Standard output carries only the MCP protocol. The log (one line per tool call, no secret)
   goes to standard error, which the MCP client files with its own logs.
 - The audit log records every tool call: tool, target, outcome, duration and the number of
