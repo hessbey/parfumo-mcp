@@ -1,0 +1,21 @@
+{
+  "name": "parfumo-mcp",
+  "version": "0.0.0-dev",
+  "description": "Unofficial MCP server for Parfumo: fragrance database, collection, wear log, ratings, reviews and community, for AI assistants. Local, over stdio.",
+  "keywords": ["mcp", "model-context-protocol", "parfumo", "fragrance", "perfume"],
+  "license": "MIT",
+  "homepage": "https://github.com/hessbey/parfumo-mcp#readme",
+  "bugs": "https://github.com/hessbey/parfumo-mcp/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hessbey/parfumo-mcp.git"
+  },
+  "bin": {
+    "parfumo-mcp": "bin/parfumo-mcp.js"
+  },
+  "files": ["bin"],
+  "engines": {
+    "node": ">=18"
+  },
+  "optionalDependencies": {}
+}

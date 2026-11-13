@@ -1,6 +1,7 @@
 # Lint and offline tests of the four crates, release build of both binaries (local server
-# `parfumo-mcp`, HTTP server `parfumo-mcp-server`), the same tests and builds on macOS and
-# Windows, then the Docker image of the HTTP server (size, startup, idle memory).
+# `parfumo-mcp`, HTTP server `parfumo-mcp-server`), the npm packages of the local one, the
+# same tests and builds on macOS and Windows, then the Docker image of the HTTP server
+# (size, startup, idle memory).
 name: ci
 
 on:
@@ -33,6 +34,8 @@ jobs:
         run: |
           target/release/parfumo-mcp --version
           target/release/parfumo-mcp-server --version
+      - name: npm packages (packed, installed and run, nothing published)
+        run: node npm/test.mjs target/release/parfumo-mcp
 
   platforms:
     name: test (${{ matrix.os }})
@@ -54,6 +57,9 @@ jobs:
         run: |
           target/release/parfumo-mcp --version
           target/release/parfumo-mcp-server --version
+      - name: npm packages (packed, installed and run, nothing published)
+        shell: bash
+        run: node npm/test.mjs target/release/parfumo-mcp$([ "$RUNNER_OS" = Windows ] && echo .exe)
 
   image:
     runs-on: ubuntu-latest

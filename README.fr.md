@@ -43,15 +43,12 @@ des parfums, votre collection, vos ports, vos notes et avis, et la partie commun
 
 ## Démarrage rapide (local)
 
-Téléchargez l'archive correspondant à votre système depuis la
-[dernière version](https://github.com/hessbey/parfumo-mcp/releases/latest) et décompressez-la. Elle contient le programme `parfumo-mcp`,
-prêt à l'emploi sous Linux, macOS et Windows. Pour le compiler vous-même, voir
-[Usage local](docs/LOCAL.md#install).
-
-Ajoutez-le à Claude Code :
+Avec [Node.js](https://nodejs.org) installé, il n'y a rien à télécharger : `npx` récupère
+le programme correspondant à votre système (Linux, macOS ou Windows). Ajoutez-le à Claude
+Code :
 
 ```sh
-claude mcp add parfumo -- /chemin/vers/parfumo-mcp
+claude mcp add parfumo -- npx -y parfumo-mcp
 ```
 
 Ou à tout client configuré par un fichier JSON (Claude Desktop et la plupart des autres) :
@@ -59,16 +56,20 @@ Ou à tout client configuré par un fichier JSON (Claude Desktop et la plupart d
 ```json
 {
   "mcpServers": {
-    "parfumo": { "command": "/chemin/vers/parfumo-mcp" }
+    "parfumo": { "command": "npx", "args": ["-y", "parfumo-mcp"] }
   }
 }
 ```
 
 C'est tout : les outils publics fonctionnent aussitôt. La première fois qu'un outil a besoin
 de votre compte Parfumo, l'assistant vous donne le lien d'une page de connexion ouverte sur
-votre propre ordinateur ; vous pouvez aussi l'ouvrir vous-même avec `parfumo-mcp login`.
-Votre mot de passe se saisit là, jamais dans la conversation, et il est conservé chiffré sur
-votre ordinateur. Détail : [Usage local](docs/LOCAL.md).
+votre propre ordinateur ; vous pouvez aussi l'ouvrir vous-même avec
+`npx -y parfumo-mcp login`. Votre mot de passe se saisit là, jamais dans la conversation, et
+il est conservé chiffré sur votre ordinateur.
+
+Sans Node.js, téléchargez le programme depuis la
+[dernière version](https://github.com/hessbey/parfumo-mcp/releases/latest) et donnez son chemin au client à la place. Détail :
+[Usage local](docs/LOCAL.md).
 
 Pour l'héberger pour plusieurs personnes, voir [Hébergement](docs/HOSTING.md) : le serveur
 est publié sous forme d'image Docker, `ghcr.io/hessbey/parfumo-mcp-server`.
@@ -117,6 +118,7 @@ crates/parfumo-mcp-core    bibliothèque : les 48 outils, la session Parfumo, le
 crates/parfumo-mcp         binaire local : les outils sur stdio
 crates/parfumo-mcp-server  binaire hébergé : les outils sur HTTP, avec OAuth, utilisateurs,
                            canari
+npm/                       les paquets npm qui livrent le binaire local (`npx parfumo-mcp`)
 ```
 
 Parfumo est un site rendu côté serveur, sans API publique : le client analyse donc du HTML.
