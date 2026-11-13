@@ -9,6 +9,7 @@
 | [Configuration](CONFIGURATION.md) | Every environment variable; public-write lock, caps and recipients |
 | [Tool catalog](TOOL_CATALOG.md) | The 48 tools, conventions, error codes |
 | [Project status](STATUS.md) | What is proven against the real site, what is not, what is left to do |
+| [Application interface](APP_API.md) | What is known of Parfumo's JSON interface (`/app/v1`), as a basis for moving the tools off HTML parsing |
 
 ## In-depth references (French)
 
