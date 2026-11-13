@@ -12,7 +12,7 @@ aes-gcm = "0.11.1"
 base64 = "0.23.1"
 hex = "0.4.3"
 http = "1.5.0"
-parfumo-client = { version = "0.2.1", path = "../parfumo-client" }
+parfumo-client = { version = "0.2.2", path = "../parfumo-client" }
 rand = "0.10.3"
 rmcp = { version = "3.9.0", features = ["server", "macros", "schemars"] }
 rusqlite = { version = "0.42.0", features = ["bundled"] }

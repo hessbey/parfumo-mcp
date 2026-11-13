@@ -12,7 +12,7 @@ rust-version.workspace = true
 axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio", "form", "query"] }
 clap = { version = "4.6.7", features = ["derive"] }
 # The 48 tools, the Parfumo session, the cache and the audit log.
-parfumo-mcp-core = { version = "0.2.1", path = "../parfumo-mcp-core" }
+parfumo-mcp-core = { version = "0.2.2", path = "../parfumo-mcp-core" }
 rmcp = { version = "3.9.0", features = ["server", "transport-io"] }
 serde = { version = "1.0.229", features = ["derive"] }
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "signal", "time", "io-std", "net", "sync"] }

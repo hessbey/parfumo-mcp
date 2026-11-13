@@ -11,7 +11,7 @@ x-logging: &logging
 services:
   server:
     # The published image, for amd64 and arm64. PARFUMO_MCP_VERSION in .env pins a version
-    # (for example 0.2.1); without it the latest release is used.
+    # (for example 0.2.2); without it the latest release is used.
     image: ghcr.io/hessbey/parfumo-mcp-server:${PARFUMO_MCP_VERSION:-latest}
     restart: unless-stopped
     env_file: .env

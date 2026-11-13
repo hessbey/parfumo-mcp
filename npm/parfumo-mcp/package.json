@@ -1,5 +1,5 @@
 {
-  "name": "parfumo-mcp",
+  "name": "@hessbey/parfumo-mcp",
   "version": "0.0.0-dev",
   "description": "Unofficial MCP server for Parfumo: fragrance database, collection, wear log, ratings, reviews and community, for AI assistants. Local, over stdio.",
   "keywords": ["mcp", "model-context-protocol", "parfumo", "fragrance", "perfume"],

@@ -176,7 +176,7 @@ curl https://<votre-domaine>/healthz
 ```
 
 Le serveur utilise l'image publiée `ghcr.io/hessbey/parfumo-mcp-server`. Sans réglage, c'est
-la dernière version ; `PARFUMO_MCP_VERSION=0.2.1` dans `.env` en fige une, et la mise à jour
+la dernière version ; `PARFUMO_MCP_VERSION=0.2.2` dans `.env` en fige une, et la mise à jour
 consiste alors à changer ce numéro avant les commandes ci-dessus. Pour une image construite
 soi-même, voir [HOSTING.md](HOSTING.md#install).
 
@@ -199,7 +199,7 @@ autorisation : le client légitime doit alors se reconnecter. C'est voulu.
 sort pas du réseau Docker.
 
 **Surveillance.** `GET /healthz` répond 200 tant que la base répond, et donne le dernier
-verdict du canari : `{"canary":{"at":…,"status":"ok"},"status":"ok","version":"0.2.1"}`. Le
+verdict du canari : `{"canary":{"at":…,"status":"ok"},"status":"ok","version":"0.2.2"}`. Le
 verdict du canari ne fait jamais échouer le contrôle de santé : un conteneur ne doit pas
 redémarrer parce que Parfumo a changé une page.
 
@@ -214,8 +214,8 @@ Une version se publie en poussant un tag. Le reste est automatique
 2. Poser le tag du même numéro, précédé de `v`, et le pousser :
 
    ```sh
-   git tag v0.2.1
-   git push origin v0.2.1
+   git tag v0.2.2
+   git push origin v0.2.2
    ```
 
    Le tag doit correspondre exactement à la version de `Cargo.toml`, sinon la publication
@@ -226,11 +226,12 @@ Une version se publie en poussant un tag. Le reste est automatique
    - crée la page de version sur GitHub, avec les archives et le fichier `SHA256SUMS` ;
    - publie l'image Docker du serveur pour amd64 et arm64 sur
      `ghcr.io/hessbey/parfumo-mcp-server`, sous le numéro de version et sous `latest` ;
-   - publie le binaire local sur npm : le paquet `parfumo-mcp`, que lance
-     `npx -y parfumo-mcp`, et un paquet par système qui contient le binaire
-     (`parfumo-mcp-linux-x64`, `-linux-arm64`, `-darwin-arm64`, `-darwin-x64`, `-win32-x64`).
+   - publie le binaire local sur npm : le paquet `@hessbey/parfumo-mcp`, que lance
+     `npx -y @hessbey/parfumo-mcp`, et un paquet par système qui contient le binaire
+     (`@hessbey/parfumo-mcp-linux-x64`, `-linux-arm64`, `-darwin-arm64`, `-darwin-x64`,
+     `-win32-x64`).
 
-Un tag de pré-version (`v0.2.1-rc.1`) crée une pré-version et ne déplace pas `latest` ; sur
+Un tag de pré-version (`v0.2.2-rc.1`) crée une pré-version et ne déplace pas `latest` ; sur
 npm, il est publié sous l'étiquette `next`.
 
 **npm.** La publication sur npm vient en dernier, après la page de version : si elle échoue,
@@ -243,10 +244,19 @@ les paquets déjà publiés sont sautés. Elle s'authentifie de deux façons :
   write » sur tous les paquets, option « Bypass two-factor authentication » cochée. npm
   limite sa durée à 90 jours.
 - **Sans jeton** (publication de confiance), une fois les paquets créés : sur npmjs.com,
-  dans les réglages de **chacun des six paquets**, section « Trusted Publisher », choisir
+  dans les réglages de **chacun des paquets**, section « Trusted Publisher », choisir
   GitHub Actions et indiquer l'utilisateur `hessbey`, le dépôt `parfumo-mcp` et le fichier
   `release.yml`, sans environnement. Supprimer ensuite le secret `NPM_TOKEN` : il n'y a plus
   rien à renouveler.
+
+**Noms des paquets.** Tout est publié sous le compte npm du projet (`@hessbey/…`). À la
+version 0.2.1, les paquets portaient des noms sans compte : npm a accepté les quatre paquets
+Linux et macOS, puis refusé `parfumo-mcp-win32-x64` (« Package name triggered spam
+detection »), si bien que le paquet principal n'est jamais sorti. Ces quatre paquets
+orphelins de la 0.2.1 ne servent à rien et peuvent être marqués obsolètes
+(`npm deprecate`). Le nom nu `parfumo-mcp` est tout de même tenté à chaque version, comme
+copie du paquet principal, pour que personne d'autre ne le prenne : son refus par npm
+n'arrête pas la publication.
 
 Les paquets se construisent avec `npm/build.mjs` et se vérifient sans rien publier avec
 `node npm/test.mjs target/release/parfumo-mcp`, ce que fait l'intégration continue sur les
