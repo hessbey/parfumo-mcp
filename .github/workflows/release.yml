@@ -1,7 +1,7 @@
 # A release is made by pushing a tag `vX.Y.Z` that matches the version in Cargo.toml.
 # It builds both binaries for Linux, macOS and Windows, attaches the archives and their
-# checksums to a GitHub release, and publishes the Docker image of the HTTP server for
-# amd64 and arm64 on ghcr.io.
+# checksums to a GitHub release, publishes the Docker image of the HTTP server for amd64
+# and arm64 on ghcr.io, then the local program on npm (`npx parfumo-mcp`).
 name: release
 
 on:
@@ -71,6 +71,15 @@ jobs:
           path: |
             parfumo-mcp-*.tar.gz
             parfumo-mcp-*.zip
+          if-no-files-found: error
+          retention-days: 7
+      # The local program alone, for the npm package of this system.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-${{ matrix.target }}
+          path: |
+            target/${{ matrix.target }}/release/parfumo-mcp
+            target/${{ matrix.target }}/release/parfumo-mcp.exe
           if-no-files-found: error
           retention-days: 7
 
@@ -160,3 +169,54 @@ jobs:
           flags="--verify-tag --generate-notes"
           case "$GITHUB_REF_NAME" in *-*) flags="$flags --prerelease" ;; esac
           gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" $flags
+
+  # The local program on npm: one package per system, and `parfumo-mcp`, which starts the
+  # one npm installed. Runs after the GitHub release, so that a problem on the npm side
+  # never holds the release back: fix it, then "Re-run failed jobs".
+  npm:
+    name: npm
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [publish]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      # Lets npm prove that the packages were built here (provenance), and publish without
+      # a token once the packages trust this workflow (trusted publishing).
+      id-token: write
+    env:
+      HAS_TOKEN: ${{ secrets.NPM_TOKEN != '' }}
+      NPM_CONFIG_PROVENANCE: "true"
+    steps:
+      - uses: actions/checkout@v4
+      # No `registry-url` here: it would write a placeholder token that hides the real
+      # error when trusted publishing is not set up.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: npm recent enough for trusted publishing
+        run: |
+          npm install -g npm@^11.5.1
+          npm --version
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: npm-*
+          path: npm-bin
+      - name: Packages
+        run: |
+          args=""
+          for dir in npm-bin/npm-*; do
+            args="$args --binary ${dir#npm-bin/npm-}=$(ls "$dir"/parfumo-mcp*)"
+          done
+          node npm/build.mjs --version "${GITHUB_REF_NAME#v}" --out npm-dist --all $args
+      - name: Publish with the token of the repository
+        if: env.HAS_TOKEN == 'true'
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > "$RUNNER_TEMP/npmrc"
+          NPM_CONFIG_USERCONFIG="$RUNNER_TEMP/npmrc" npm/publish.sh npm-dist
+      # Without a token, npm proves to the registry that it runs in this workflow. Each
+      # package must list this repository and `release.yml` as its trusted publisher.
+      - name: Publish without a token (trusted publishing)
+        if: env.HAS_TOKEN != 'true'
+        run: npm/publish.sh npm-dist

@@ -48,14 +48,11 @@ auf die Community (Nachrichten, Forum, Blogs, Souk).
 
 ## Schnellstart (lokal)
 
-Lade das Archiv für dein System aus der [neuesten Version](https://github.com/hessbey/parfumo-mcp/releases/latest) herunter und entpacke es.
-Es enthält das Programm `parfumo-mcp`, startbereit für Linux, macOS und Windows. Wie du es
-selbst baust, steht unter [Lokale Nutzung](docs/LOCAL.md#install).
-
-Zu Claude Code hinzufügen:
+Ist [Node.js](https://nodejs.org) installiert, musst du nichts herunterladen: `npx` holt
+das Programm für dein System (Linux, macOS oder Windows). Zu Claude Code hinzufügen:
 
 ```sh
-claude mcp add parfumo -- /pfad/zu/parfumo-mcp
+claude mcp add parfumo -- npx -y parfumo-mcp
 ```
 
 Oder in jedem Client, der über eine JSON-Datei konfiguriert wird (Claude Desktop und die
@@ -64,16 +61,18 @@ meisten anderen):
 ```json
 {
   "mcpServers": {
-    "parfumo": { "command": "/pfad/zu/parfumo-mcp" }
+    "parfumo": { "command": "npx", "args": ["-y", "parfumo-mcp"] }
   }
 }
 ```
 
 Das ist alles: Die öffentlichen Tools funktionieren sofort. Sobald ein Tool zum ersten Mal
 dein Parfumo-Konto braucht, gibt dir der Assistent den Link zu einer Anmeldeseite auf deinem
-eigenen Rechner; mit `parfumo-mcp login` öffnest du sie auch selbst. Dein Passwort gibst du
-dort ein, nie im Gespräch, und es wird verschlüsselt auf deinem Rechner gespeichert. Details:
-[Lokale Nutzung](docs/LOCAL.md).
+eigenen Rechner; mit `npx -y parfumo-mcp login` öffnest du sie auch selbst. Dein Passwort
+gibst du dort ein, nie im Gespräch, und es wird verschlüsselt auf deinem Rechner gespeichert.
+
+Ohne Node.js lädst du das Programm aus der [neuesten Version](https://github.com/hessbey/parfumo-mcp/releases/latest) herunter und gibst
+dem Client stattdessen dessen Pfad an. Details: [Lokale Nutzung](docs/LOCAL.md).
 
 Für den Betrieb mit mehreren Personen siehe [Hosting](docs/HOSTING.md): Der Server wird als
 Docker-Image veröffentlicht, `ghcr.io/hessbey/parfumo-mcp-server`.
@@ -120,6 +119,7 @@ crates/parfumo-client      Bibliothek: Zugriff auf die Website. Transport, Route
 crates/parfumo-mcp-core    Bibliothek: die 48 Tools, Parfumo-Sitzung, Speicher, Audit-Protokoll
 crates/parfumo-mcp         lokales Programm: die Tools über stdio
 crates/parfumo-mcp-server  gehostetes Programm: die Tools über HTTP, mit OAuth, Nutzern, Canary
+npm/                       die npm-Pakete, die das lokale Programm ausliefern (`npx parfumo-mcp`)
 ```
 
 Parfumo wird serverseitig gerendert und hat keine öffentliche API, deshalb wertet der Client

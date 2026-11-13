@@ -42,14 +42,11 @@ blogs, Souk).
 
 ## Quick start (local)
 
-Download the archive for your system from the [latest release](https://github.com/hessbey/parfumo-mcp/releases/latest) and unpack it.
-It holds the `parfumo-mcp` program, ready to run on Linux, macOS and Windows. To build it
-yourself instead, see [Local usage](docs/LOCAL.md#install).
-
-Add it to Claude Code:
+With [Node.js](https://nodejs.org) installed, there is nothing to download: `npx` fetches
+the program for your system (Linux, macOS or Windows). Add it to Claude Code:
 
 ```sh
-claude mcp add parfumo -- /path/to/parfumo-mcp
+claude mcp add parfumo -- npx -y parfumo-mcp
 ```
 
 Or to any client configured with a JSON file (Claude Desktop and most others):
@@ -57,15 +54,18 @@ Or to any client configured with a JSON file (Claude Desktop and most others):
 ```json
 {
   "mcpServers": {
-    "parfumo": { "command": "/path/to/parfumo-mcp" }
+    "parfumo": { "command": "npx", "args": ["-y", "parfumo-mcp"] }
   }
 }
 ```
 
 That is all: the public tools work at once. The first time a tool needs your Parfumo
 account, the assistant gives you the link of a login page on your own computer; or open it
-yourself with `parfumo-mcp login`. Your password is typed there, never in the conversation,
-and is stored encrypted on your computer. Details: [Local usage](docs/LOCAL.md).
+yourself with `npx -y parfumo-mcp login`. Your password is typed there, never in the
+conversation, and is stored encrypted on your computer.
+
+Without Node.js, download the program from the [latest release](https://github.com/hessbey/parfumo-mcp/releases/latest) and give the
+client its path instead. Details: [Local usage](docs/LOCAL.md).
 
 To host it for several people, see [Hosting](docs/HOSTING.md): the server is published as a
 Docker image, `ghcr.io/hessbey/parfumo-mcp-server`.
@@ -108,6 +108,7 @@ crates/parfumo-client      library: access to the site. Transport, routes and se
 crates/parfumo-mcp-core    library: the 48 tools, Parfumo session, storage, audit log
 crates/parfumo-mcp         local binary: the tools over stdio
 crates/parfumo-mcp-server  hosted binary: the tools over HTTP, with OAuth, users, canary
+npm/                       the npm packages that deliver the local binary (`npx parfumo-mcp`)
 ```
 
 Parfumo is a server-rendered site with no public API, so the client parses HTML. All routes
