@@ -68,6 +68,11 @@ pub struct Site {
     pub writes: Arc<Mutex<Vec<(String, String, String)>>>,
     /// Every request: (path, cookie header).
     pub seen: Arc<Mutex<Vec<(String, String)>>>,
+    /// Application interface (`/app/v1`): live session tokens → username.
+    pub app_live: Arc<Mutex<HashMap<String, String>>>,
+    pub app_logins: Arc<AtomicU32>,
+    /// When set, the application interface refuses every login.
+    pub app_login_refused: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Site {
@@ -192,6 +197,28 @@ async fn handler(State(site): State<Site>, method: Method, uri: Uri, headers: He
 
     if path == "/api/alive" {
         return format!("{{\"csrf_key\":\"{CSRF}\"}}").into_response();
+    }
+    if let Some(call) = path.strip_prefix("/app/v1") {
+        let json = |status: StatusCode, text: String| (status, [(header::CONTENT_TYPE, "application/json")], text).into_response();
+        if call == "/auth/login" {
+            let count = site.app_logins.fetch_add(1, Ordering::SeqCst) + 1;
+            let user = f("email");
+            let known = site.accounts.lock().unwrap().contains_key(&user);
+            if site.app_login_refused.load(Ordering::SeqCst) || !known || f("password") != format!("pw-{user}") || f("device_id").is_empty() {
+                return json(StatusCode::UNAUTHORIZED, "{\"status\":\"error\",\"message\":\"Invalid credentials\"}".into());
+            }
+            let token = format!("app-{user}-{count}");
+            site.app_live.lock().unwrap().insert(token.clone(), user.clone());
+            return json(StatusCode::OK, format!("{{\"status\":\"success\",\"auth_token\":\"{token}\",\"nick_name\":\"{user}\"}}"));
+        }
+        let bearer = headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("Bearer ")).unwrap_or("");
+        let Some(user) = site.app_live.lock().unwrap().get(bearer).cloned() else {
+            return json(StatusCode::UNAUTHORIZED, "{\"status\":\"error\",\"message\":\"Authorization header required\"}".into());
+        };
+        return match call {
+            "/auth/me" => json(StatusCode::OK, format!("{{\"status\":\"success\",\"user\":{{\"nick_name\":\"{user}\"}}}}")),
+            _ => json(StatusCode::NOT_FOUND, "{\"error\":\"Not found\"}".into()),
+        };
     }
     if path == "/api/account/login" {
         let count = site.logins.fetch_add(1, Ordering::SeqCst) + 1;

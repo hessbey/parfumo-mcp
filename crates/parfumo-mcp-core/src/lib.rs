@@ -30,6 +30,8 @@ pub mod testing;
 #[cfg(test)]
 mod account_tests;
 #[cfg(test)]
+mod app_session_tests;
+#[cfg(test)]
 mod feedback_tests;
 #[cfg(test)]
 mod social_tests;

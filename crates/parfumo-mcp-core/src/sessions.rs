@@ -56,8 +56,16 @@ pub trait ParfumoAuth: Sync {
 }
 
 impl ParfumoAuth for ParfumoClient {
-    fn login(&self, username: &str, password: &str) -> impl Future<Output = Result<(), ClientError>> + Send {
-        ParfumoClient::login(self, username, password)
+    /// The web site first; then the application interface, with the same credentials. The
+    /// account is linked as soon as the web site accepts them: without a session of the
+    /// application interface, the tools read the web pages instead.
+    async fn login(&self, username: &str, password: &str) -> Result<(), ClientError> {
+        ParfumoClient::login(self, username, password).await?;
+        if let Err(e) = self.app_login(username, password).await {
+            // `ClientError` never carries a secret (tested in parfumo-client).
+            tracing::warn!(error = %e, "no session of the application interface: the web pages are used instead");
+        }
+        Ok(())
     }
 }
 
@@ -114,6 +122,9 @@ pub struct Sessions {
     /// Users whose last probe or re-login met a captcha or an outage: no new attempt
     /// before the instant given, so that a refusal is never hammered.
     backoff: Mutex<HashMap<i64, (std::time::Instant, SessionError)>>,
+    /// Users whose login to the application interface failed: not tried again before the
+    /// instant given. A refused login is never repeated call after call.
+    app_backoff: Mutex<HashMap<i64, std::time::Instant>>,
     /// The `rev` of the link each in-memory session belongs to. Another process may link
     /// a different account (`parfumo-mcp login` next to a running stdio server): the
     /// session kept here is then dropped instead of acting for the previous account.
@@ -138,6 +149,7 @@ impl Sessions {
             verified: Mutex::new(HashMap::new()),
             relogin: Mutex::new(HashMap::new()),
             backoff: Mutex::new(HashMap::new()),
+            app_backoff: Mutex::new(HashMap::new()),
             link_revs: Mutex::new(HashMap::new()),
         }
     }
@@ -341,7 +353,10 @@ impl Sessions {
             return Err(error);
         }
         match client.is_logged_in().await {
-            Ok(true) => return Ok(client),
+            Ok(true) => {
+                self.ensure_app_session(user_id, &client, &link).await?;
+                return Ok(client);
+            }
             Ok(false) => {}
             Err(ClientError::CaptchaRequired) => {
                 self.back_off(user_id, &SessionError::CaptchaRequired);
@@ -376,6 +391,42 @@ impl Sessions {
                 Err(e)
             }
         }
+    }
+}
+
+impl Sessions {
+    /// Credentials mode: logs in to the application interface when the client holds no
+    /// session of it (the site ended it, or it was never obtained). One attempt, then a
+    /// pause: without it the tools read the web pages, which is no reason to insist.
+    async fn ensure_app_session(&self, user_id: i64, client: &ParfumoClient, link: &crate::db::LinkRow) -> Result<(), SessionError> {
+        if client.has_app_session() || link.mode != "credentials" {
+            return Ok(());
+        }
+        let Some(secret) = &link.secret else { return Ok(()) };
+        let now = std::time::Instant::now();
+        if self.app_backoff.lock().unwrap_or_else(|p| p.into_inner()).get(&user_id).is_some_and(|until| now < *until) {
+            return Ok(());
+        }
+        let plain = self.key.decrypt(secret, &aad(user_id, "credentials")).map_err(internal)?;
+        let creds: Credentials = serde_json::from_slice(&plain).map_err(internal)?;
+        match client.app_login(&creds.username, &creds.password).await {
+            Ok(()) => {
+                self.app_backoff.lock().unwrap_or_else(|p| p.into_inner()).remove(&user_id);
+                let cookies = self.encrypt_cookies(user_id, client)?;
+                self.db.link_update_session(user_id, Some(&cookies), &link.status, false).map_err(internal)?;
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "no session of the application interface: the web pages are used instead");
+                self.app_backoff.lock().unwrap_or_else(|p| p.into_inner()).insert(user_id, now + LOGIN_BACKOFF);
+            }
+        }
+        Ok(())
+    }
+
+    /// Ends the pause that follows a failed login to the application interface (tests).
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn end_app_backoff(&self, user_id: i64) {
+        self.app_backoff.lock().unwrap_or_else(|p| p.into_inner()).remove(&user_id);
     }
 }
 
