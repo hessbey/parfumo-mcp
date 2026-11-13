@@ -29,9 +29,7 @@ cp .env.example .env
 
 # 1. Set PARFUMO_MCP_DOMAIN in .env
 
-# 2. Build the image (about ten minutes), generate the master key and paste it into .env
-#    (PARFUMO_MCP_MASTER_KEY=…)
-docker compose build
+# 2. Generate the master key and paste it into .env (PARFUMO_MCP_MASTER_KEY=…)
 docker compose run --rm --no-deps server keygen
 
 # 3. Start
@@ -39,9 +37,14 @@ docker compose up -d
 curl https://<your-domain>/healthz        # {"canary":null,"status":"ok","version":"0.1.1"}
 ```
 
-To skip the build, use the published image, for amd64 and arm64: replace `build: .` and
-the `image:` line of `docker-compose.yml` with
-`image: ghcr.io/hessbey/parfumo-mcp-server:<version>` (or `:latest`).
+Nothing is compiled on the server: Compose downloads the published image,
+`ghcr.io/hessbey/parfumo-mcp-server`, built for amd64 and arm64.
+
+- **Version.** Without a setting, the latest release runs. To pin one, add
+  `PARFUMO_MCP_VERSION=0.1.1` to `.env`: an upgrade then only happens when you change it.
+- **Upgrade.** `docker compose pull`, then `docker compose up -d`.
+- **Your own build.** `docker build -t ghcr.io/hessbey/parfumo-mcp-server:local .`, then
+  `PARFUMO_MCP_VERSION=local` in `.env`.
 
 Open ports 80 and 443 on the VPS, and only those: the server's port 8080 does not leave the
 Docker network. Then [add a user](#add-a-user).
@@ -50,14 +53,14 @@ Docker network. Then [add a user](#add-a-user).
 unreadable and every user must link their account again.
 
 The container runs unprivileged: user 10001, read-only file system outside the `/data`
-volume, no Linux capability, 256 MB of memory at most. To check the image on the VPS (size,
-non-root user, startup, idle memory — no request to Parfumo):
-
-```sh
-scripts/check-image.sh
-```
+volume, no Linux capability, 256 MB of memory at most. CI builds the image from
+every commit and checks its size, its non-root user, its startup and its idle memory;
+`scripts/check-image.sh` runs the same checks on an image you build yourself.
 
 ### Local trial, without HTTPS or a domain
+
+This one builds the image from the source tree, about ten minutes the first time, so that
+a change can be tried before it is released. It needs a `.env` holding the master key.
 
 ```sh
 docker compose -f docker-compose.local.yml up -d
