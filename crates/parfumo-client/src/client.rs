@@ -587,6 +587,14 @@ impl ParfumoClient {
     /// `r` is a URL, a path (`/Fragrance_Note/Bergamot` for a note, `/Fragrance_Notes/Citric_notes`
     /// for a category), a slug or a note name.
     pub async fn get_note(&self, r: &str, page: u32) -> Result<NotePage, ClientError> {
+        // Through the application interface when a session of it is held and it designates
+        // the note with certainty (a number, a name one note bears, a top-level category);
+        // the web site otherwise.
+        if self.has_app_session()
+            && let Some(note) = self.app_note(r, page).await?
+        {
+            return Ok(note);
+        }
         let (absolute, path) = self.ref_path(r)?;
         if absolute {
             let (prefix, category) = if path.starts_with(routes::NOTE_CATEGORY_PREFIX) {
