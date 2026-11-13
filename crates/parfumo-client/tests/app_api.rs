@@ -18,11 +18,13 @@ const TOKEN: &str = "tok-123";
 const PASSWORD: &str = "s3cr3t-pass";
 const BLOCK_PAGE: &str = "<html><title>Access Denied</title><p>your access to this website has been temporarily blocked</p></html>";
 
+/// One request received: `(method, path, Authorization, Cookie, body)`.
+type Seen = (String, String, String, String, String);
+
 /// What the fake site saw, and how it is told to answer.
 #[derive(Default)]
 struct Site {
-    /// `(method, path, Authorization, Cookie, body)` of every request.
-    seen: Mutex<Vec<(String, String, String, String, String)>>,
+    seen: Mutex<Vec<Seen>>,
     /// The token the site accepts right now.
     live: Mutex<String>,
     blocked: Mutex<bool>,
