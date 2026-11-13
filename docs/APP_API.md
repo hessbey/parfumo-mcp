@@ -44,7 +44,7 @@ as `multipart/form-data`. Answers are JSON. Without a valid token the answer is 
 
 | Call | Body | Answer |
 | --- | --- | --- |
-| `POST /auth/login`, no `Authorization` | `email`, `password`, `device_id` (any text) | `{status, auth_token, user_id, nick_name, photo}` |
+| `POST /auth/login`, no `Authorization` | `email` (the e-mail or the nickname: both were accepted), `password`, `device_id` (any text) | `{status, auth_token, user_id, nick_name, photo}` |
 | `GET /auth/me` | — | `{status, user: {id, nick_name, email, gender, time_zone_id, …}}` |
 | `POST /auth/logout` | — | ends the session: the token stops working |
 

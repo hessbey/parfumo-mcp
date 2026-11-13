@@ -328,6 +328,9 @@ impl ParfumoClient {
     /// or a `Brand/Perfume` id. The community classification needs a second request; if it
     /// fails the record is returned without it and a warning is added.
     pub async fn get_perfume(&self, r: &str) -> Result<PerfumeDetails, ClientError> {
+        if self.has_app_session() {
+            return self.app_get_perfume(r).await;
+        }
         let (mut details, ctx) = self.perfume_ctx(r, false).await?;
         match &ctx.class_h {
             None => details.warnings.push("classification: token not found on the page".into()),

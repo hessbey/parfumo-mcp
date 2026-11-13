@@ -259,6 +259,9 @@ pub(crate) struct Transport {
     csrf: Mutex<Option<String>>,
     /// Nickname of the logged-in member, memoised with the session (see `forget_csrf`).
     pub(crate) nick: Mutex<Option<String>>,
+    /// Numbers of the perfumes met in listings, by lower-case `brand/perfume` id: the
+    /// application interface only knows perfumes by number.
+    pub(crate) perfume_ids: Mutex<std::collections::HashMap<String, u64>>,
 }
 
 /// TLS settings of every outgoing connection of the project: the `ring` provider and the
@@ -293,7 +296,18 @@ impl Transport {
             .use_preconfigured_tls(tls_config())
             .build()
             .map_err(|e| ClientError::Upstream(format!("cannot build HTTP client: {}", e.without_url())))?;
-        Ok(Self { cfg, base, http, jar, global, cache, next_slot: limiter, csrf: Mutex::new(None), nick: Mutex::new(None) })
+        Ok(Self {
+            cfg,
+            base,
+            http,
+            jar,
+            global,
+            cache,
+            next_slot: limiter,
+            csrf: Mutex::new(None),
+            nick: Mutex::new(None),
+            perfume_ids: Mutex::new(std::collections::HashMap::new()),
+        })
     }
 
     pub fn host(&self) -> &str {

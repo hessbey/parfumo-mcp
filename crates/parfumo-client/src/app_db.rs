@@ -5,7 +5,7 @@ use serde_json::Value;
 
 use crate::{
     ClientError, ParfumoClient,
-    models::{Gender, Listing, PerfumeSummary, SearchQuery},
+    models::{ClassGroup, ClassShare, EntityRef, Gender, Listing, NotePyramid, PerfumeDetails, PerfumeSummary, RatingScore, SearchQuery},
     site::routes,
 };
 
@@ -50,12 +50,160 @@ pub(crate) fn out_of_ten(percent: f64) -> f32 {
     ((percent / 10.0) * 10.0).round() as f32 / 10.0
 }
 
+/// The names of a list of notes (`[{id, name, …}]`), without the empty placeholders.
+fn note_names(p: &Value, key: &str) -> Vec<String> {
+    p.get(key).and_then(Value::as_array).map(|notes| notes.iter().filter_map(|n| text(n, "name")).collect()).unwrap_or_default()
+}
+
+/// The four charts of the community classification, in the order the interface sends them.
+const CLASS_GROUPS: [&str; 4] = ["Type", "Season", "Occasion", "Audience & Style"];
+/// The five rating scales: name, then the suffix of their fields.
+const SCALES: [(&str, &str); 5] = [("scent", ""), ("durability", "_dur"), ("sillage", "_sillage"), ("bottle", "_bottle"), ("pricing", "_pricing")];
+
 impl ParfumoClient {
+    fn remember_perfume(&self, id: &str, p_id: u64) {
+        self.t.perfume_ids.lock().unwrap_or_else(|e| e.into_inner()).insert(id.to_lowercase(), p_id);
+    }
+
+    /// The number of a perfume from a reference: a number, a Parfumo URL or a
+    /// `Brand/Perfume` id. An id met in a listing is known at once; another is looked up
+    /// through its brand, in two calls.
+    pub(crate) async fn app_perfume_id(&self, reference: &str) -> Result<u64, ClientError> {
+        let reference = reference.trim();
+        if !reference.is_empty() && reference.chars().all(|c| c.is_ascii_digit()) {
+            return reference.parse().map_err(|_| ClientError::InvalidInput("not a perfume number".into()));
+        }
+        let id = self.perfume_ref_id(reference)?;
+        let known = |c: &Self| c.t.perfume_ids.lock().unwrap_or_else(|e| e.into_inner()).get(&id.to_lowercase()).copied();
+        if let Some(p_id) = known(self) {
+            return Ok(p_id);
+        }
+        let (brand_url, name_url) = id.split_once('/').ok_or_else(|| ClientError::InvalidInput("not a perfume reference".into()))?;
+        let words = |slug: &str| slug.replace(['_', '-'], " ");
+        let found = self.app_get("/search", &[pair("filter", words(brand_url))]).await?;
+        let brand = found
+            .get("brands")
+            .and_then(Value::as_array)
+            .and_then(|brands| brands.iter().find(|b| text(b, "b_name_url").is_some_and(|u| u.eq_ignore_ascii_case(brand_url))))
+            .and_then(|b| count(b, "b_id"))
+            .ok_or_else(|| ClientError::NotFound(id.clone()))?;
+        let params = [
+            pair("page", 1),
+            pair("per_page", PER_PAGE),
+            pair("filter", words(name_url)),
+            pair("b_id", brand),
+            pair("g_f", 1),
+            pair("g_m", 1),
+            pair("g_u", 1),
+        ];
+        let listing = self.app_get("/perfumes", &params).await?;
+        // Reading the rows records their numbers.
+        for row in listing.get("rows").and_then(Value::as_array).into_iter().flatten() {
+            self.summary_from_index_row(row);
+        }
+        known(self).ok_or(ClientError::NotFound(id))
+    }
+
+    /// The full record of a perfume (`GET /perfume_details/{id}`).
+    pub(crate) async fn app_get_perfume(&self, reference: &str) -> Result<PerfumeDetails, ClientError> {
+        let p_id = self.app_perfume_id(reference).await?;
+        let record = self.app_get(&format!("/perfume_details/{p_id}"), &[]).await?;
+        let outdated = |what: &str| ClientError::ParserOutdated(format!("/app/v1/perfume_details: {what}"));
+        let (p, b) = (record.get("p").ok_or_else(|| outdated("no perfume"))?, record.get("b").ok_or_else(|| outdated("no brand"))?);
+        let (brand_url, name_url) =
+            (text(b, "name_url").ok_or_else(|| outdated("no brand id"))?, text(p, "name_url").ok_or_else(|| outdated("no perfume id"))?);
+        let id = format!("{brand_url}/{name_url}");
+        self.remember_perfume(&id, p_id);
+
+        let entity = |prefix: &str, slug: String, numeric: Option<u64>, name: String| EntityRef {
+            url: self.t.absolute(&format!("{prefix}{slug}")),
+            id: slug,
+            numeric_id: numeric,
+            name,
+        };
+        let perfumers = p
+            .get("perfumers_array")
+            .and_then(Value::as_array)
+            .map(|all| {
+                all.iter()
+                    .filter_map(|pf| Some(entity(routes::PERFUMERS_PREFIX, text(pf, "name_url")?, count(pf, "id"), text(pf, "name")?)))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let ratings = SCALES
+            .iter()
+            .filter_map(|(scale, suffix)| {
+                let votes = count(p, &format!("total_votings{suffix}"))?;
+                Some(RatingScore {
+                    dimension: scale.to_string(),
+                    average: out_of_ten(number(p, &format!("avg_voting{suffix}"))?),
+                    votes: u32::try_from(votes).ok(),
+                })
+            })
+            .collect();
+        let charts: Vec<&Vec<Value>> =
+            record.get("c").and_then(Value::as_array).map(|c| c.iter().filter_map(Value::as_array).collect()).unwrap_or_default();
+        let totals = record.get("c_total").and_then(Value::as_array);
+        let classification: Vec<ClassGroup> = charts
+            .iter()
+            .zip(CLASS_GROUPS)
+            .enumerate()
+            .filter(|(_, (chart, _))| !chart.is_empty())
+            .map(|(i, (chart, group))| {
+                let mut shares: Vec<ClassShare> = chart
+                    .iter()
+                    .filter_map(|s| Some(ClassShare { label: text(s, "n")?, percent: (number(s, "p")? * 10.0).round() as f32 / 10.0 }))
+                    .collect();
+                shares.sort_by(|a, b| b.percent.total_cmp(&a.percent));
+                ClassGroup {
+                    group: group.to_string(),
+                    votes: totals.and_then(|t| t.get(i)).and_then(Value::as_u64).and_then(|n| u32::try_from(n).ok()),
+                    shares,
+                }
+            })
+            .collect();
+        Ok(PerfumeDetails {
+            url: text(p, "url_web").unwrap_or_else(|| self.t.absolute(&format!("{}{id}", routes::PERFUMES_PREFIX))),
+            p_id: Some(p_id),
+            name: text(p, "con_ext_name").or_else(|| text(p, "name")).ok_or_else(|| outdated("no name"))?,
+            brand: entity(routes::PERFUMES_PREFIX, brand_url, count(b, "id"), text(b, "name").ok_or_else(|| outdated("no brand name"))?),
+            year: count(p, "release_year").and_then(|y| u16::try_from(y).ok()),
+            gender: gender(p, "gender"),
+            concentration: text(p, "con_ext_concentration"),
+            perfumers,
+            notes: NotePyramid {
+                top: note_names(p, "top_notes"),
+                heart: note_names(p, "middle_notes"),
+                base: note_names(p, "base_notes"),
+                flat: note_names(p, "notes"),
+            },
+            // The main accords are the strongest shares of the "Type" chart.
+            accords: classification
+                .iter()
+                .find(|g| g.group == "Type")
+                .map(|g| g.shares.iter().map(|s| s.label.clone()).collect())
+                .unwrap_or_default(),
+            ratings,
+            classification,
+            ranking: None,
+            facts: text(p, "info_en").or_else(|| text(p, "info")),
+            description: text(p, "desc"),
+            reviews_count: count(p, "total_reviews_en").and_then(|n| u32::try_from(n).ok()),
+            statements_count: count(p, "total_statements_en").and_then(|n| u32::try_from(n).ok()),
+            image_url: ["url_image_480", "url_image_240"].iter().find_map(|k| text(p, k)),
+            id,
+            warnings: Vec::new(),
+        })
+    }
+
     /// A row of the filtered listing (`GET /perfumes`, and the listings of a brand, a
     /// perfumer or a note): a document of the search index.
     pub(crate) fn summary_from_index_row(&self, row: &Value) -> Option<PerfumeSummary> {
         let (brand_url, name_url) = (text(row, "b_name_url")?, text(row, "p_name_url")?);
         let votes = count(row, "p_total_votings");
+        if let Some(p_id) = count(row, "p_id") {
+            self.remember_perfume(&format!("{brand_url}/{name_url}"), p_id);
+        }
         Some(PerfumeSummary {
             id: format!("{brand_url}/{name_url}"),
             p_id: count(row, "p_id"),
