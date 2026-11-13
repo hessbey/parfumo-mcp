@@ -1,0 +1,101 @@
+{
+ "category": {
+  "id": 5,
+  "name": "Aldehydes",
+  "name_url": "Aldehydes",
+  "nr_of_perfumes": 3029
+ },
+ "related_categories": [
+  {
+   "id": 304,
+   "name": "Fragrance ingredients"
+  },
+  {
+   "id": 485,
+   "name": "Soapy notes"
+  }
+ ],
+ "notes": [
+  {
+   "id": 42,
+   "name": "Aldehydes",
+   "nr": 2970,
+   "img": "https://media.parfumo.com/notes_png/c8/c8_7186688cc842283c354c8b067a6cc9f4032c9369_1200.png?width=120&aspect_ratio=1:1"
+  },
+  {
+   "id": 2591,
+   "name": "Soap",
+   "nr": 134,
+   "img": "https://media.parfumo.com/notes_png/6d/6d_5272603655c6ccaa33ba8de24b8070a25aed07e9_1200.png?width=120&aspect_ratio=1:1"
+  },
+  {
+   "id": 4222,
+   "name": "Soapy notes",
+   "nr": 32,
+   "img": "https://media.parfumo.com/notes_png/6d/6d_5272603655c6ccaa33ba8de24b8070a25aed07e9_1200.png?width=120&aspect_ratio=1:1"
+  }
+ ],
+ "perfumes": [
+  {
+   "id": "113427",
+   "p_name": "Y",
+   "p_name_url": "Y_Eau_de_Parfum",
+   "concentration": "Eau de Parfum",
+   "gender": "maennlich",
+   "url_image_240": "https://media.parfumo.com/perfumes/0b/0bf107-y-eau-de-parfum-yves-saint-laurent_1200.jpg?width=240&aspect_ratio=1:1",
+   "url_image_480": "https://media.parfumo.com/perfumes/0b/0bf107-y-eau-de-parfum-yves-saint-laurent_1200.jpg?width=480&aspect_ratio=1:1",
+   "release_year": "2018",
+   "b_id": "91",
+   "b_name": "Yves Saint Laurent",
+   "avg_voting": "75.254",
+   "total_votings": "4527"
+  },
+  {
+   "id": "205",
+   "p_name": "Allure Homme Sport",
+   "p_name_url": "Allure_Homme_Sport_Eau_de_Toilette",
+   "concentration": "Eau de Toilette",
+   "gender": "maennlich",
+   "url_image_240": "https://media.parfumo.com/perfumes/fe/fe015b-allure-homme-sport-eau-de-toilette-chanel_1200.jpg?width=240&aspect_ratio=1:1",
+   "url_image_480": "https://media.parfumo.com/perfumes/fe/fe015b-allure-homme-sport-eau-de-toilette-chanel_1200.jpg?width=480&aspect_ratio=1:1",
+   "release_year": "2004",
+   "b_id": "20",
+   "b_name": "Chanel",
+   "avg_voting": "79.032",
+   "total_votings": "2582"
+  },
+  {
+   "id": "3381",
+   "p_name": "Cuir Béluga",
+   "p_name_url": "cuir-beluga-eau-de-parfum",
+   "concentration": "Eau de Parfum",
+   "gender": "unisex",
+   "url_image_240": "https://media.parfumo.com/perfumes/4d/4d421a-cuir-beluga-guerlain_1200.jpg?width=240&aspect_ratio=1:1",
+   "url_image_480": "https://media.parfumo.com/perfumes/4d/4d421a-cuir-beluga-guerlain_1200.jpg?width=480&aspect_ratio=1:1",
+   "release_year": "2005",
+   "b_id": "55",
+   "b_name": "Guerlain",
+   "avg_voting": "85.094",
+   "total_votings": "2242"
+  },
+  {
+   "id": "75018",
+   "p_name": "A Midsummer Dream",
+   "p_name_url": "A_Midsummer_Dream",
+   "concentration": "",
+   "gender": "unisex",
+   "url_image_240": "https://media.parfumo.com/perfumes/b5/b5bfb2_a-midsummer-dream-roja-parfums_1200.jpg?width=240&aspect_ratio=1:1",
+   "url_image_480": "https://media.parfumo.com/perfumes/b5/b5bfb2_a-midsummer-dream-roja-parfums_1200.jpg?width=480&aspect_ratio=1:1",
+   "release_year": "2016",
+   "b_id": "1058",
+   "b_name": "Roja Parfums",
+   "avg_voting": "82.205",
+   "total_votings": "1746"
+  }
+ ],
+ "total_results": 3242,
+ "page": 1,
+ "per_page": 20,
+ "total_pages": 163,
+ "gender": "all"
+}
