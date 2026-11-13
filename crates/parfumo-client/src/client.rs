@@ -579,6 +579,13 @@ impl ParfumoClient {
     /// Brand record and one page (20 items) of its perfumes. `r` is a URL, a path
     /// (`/Perfumes/Dior`), a slug or a brand name.
     pub async fn get_brand(&self, r: &str, page: u32) -> Result<BrandPage, ClientError> {
+        // Through the application interface when a session of it is held and its search
+        // knows the brand; the web page otherwise.
+        if self.has_app_session()
+            && let Some(brand) = self.app_get_brand(r, page).await?
+        {
+            return Ok(brand);
+        }
         let html = self.entity_page(r, routes::PERFUMES_PREFIX, routes::LIVESEARCH_BRAND, page, "brand").await?;
         parse::parse_brand_page(&html, page)
     }
