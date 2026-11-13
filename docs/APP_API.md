@@ -74,7 +74,7 @@ was recorded; its shape is in the appendix.
 | `GET /fragrance_notes` | `feature=category`, `cat_id`, `page`, `per_page`, `gender` | yes |
 | `GET /fragrance_notes` | `feature=combine`, …, `page`, `per_page` | no |
 | `GET /release_years` | — | yes |
-| `GET /perfumes` | `y_0` (year), `page`, `per_page`, `o`, `g_f`, `g_m`, `g_u` | yes |
+| `GET /perfumes` | `y_0` (year), `b_id` (brand), `page`, `per_page`, `o`, `g_f`, `g_m`, `g_u` : filters combine | yes |
 | `GET /discover` | `feature=tops_flops`, `type`, `gender`, `period` | yes |
 | `GET /discover` | `feature=by_color`, `color`, `gender` | no |
 | `GET /discover/{id}` | — | yes |
@@ -166,6 +166,15 @@ collection and most account settings (e-mail, password, website, personal detail
 stay on the web pages.
 
 ## Observations
+
+- `GET /perfumes` is the filtered listing: `b_id` works alone (104 perfumes of one brand)
+  and together with `y_0` (1 match). `y_1` was ignored: a range of years is not known to
+  exist. Its rows are documents of the search index, with many more fields than the rows of
+  `GET /search` (notes by id, votes, classification counters), under other names
+  (`p_name`, `p_release_year`, `b_name_url`…).
+- Sort orders (`o`) read in the application: `nr_desc`, `v_desc`, `n_asc`, `n_desc`.
+- `GET /search` answers with up to 20 perfumes plus the brands and notes that match the
+  words; it takes no filter.
 
 - Values are often numbers written as text (`"p_id": "9438"`), and sometimes plain numbers
   for the same field in another answer.
