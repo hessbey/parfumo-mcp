@@ -1,4 +1,5 @@
-# Local trial without HTTPS or Caddy:
+# Local trial without HTTPS or Caddy. Builds the image from this source tree (about ten
+# minutes the first time), so that a change can be tried before it is released:
 #   docker compose -f docker-compose.local.yml up -d
 #   curl http://localhost:8080/healthz
 services:

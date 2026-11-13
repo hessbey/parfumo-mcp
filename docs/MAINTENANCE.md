@@ -169,12 +169,16 @@ restaurer : arrêter, extraire l'archive dans le volume, démarrer.
 **Mise à jour.**
 
 ```sh
-git pull
-docker compose build
+git pull                      # nouveautés des fichiers Compose et du Caddyfile
+docker compose pull           # télécharge l'image publiée
 docker compose up -d
 curl https://<votre-domaine>/healthz
-scripts/check-image.sh        # facultatif : taille de l'image, démarrage, mémoire au repos
 ```
+
+Le serveur utilise l'image publiée `ghcr.io/hessbey/parfumo-mcp-server`. Sans réglage, c'est
+la dernière version ; `PARFUMO_MCP_VERSION=0.1.1` dans `.env` en fige une, et la mise à jour
+consiste alors à changer ce numéro avant les commandes ci-dessus. Pour une image construite
+soi-même, voir [HOSTING.md](HOSTING.md#install).
 
 Le schéma de la base se met à jour seul au démarrage. Les sessions Parfumo et les jetons
 OAuth survivent au redémarrage.
