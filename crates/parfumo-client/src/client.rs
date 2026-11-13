@@ -252,6 +252,13 @@ impl ParfumoClient {
     /// Perfume search (`/s_perfumes_x.php`). 20 results per page; the site shows at most
     /// 1000 results. Brand, perfumer and note names are resolved to Parfumo ids first.
     pub async fn search_perfumes(&self, q: &SearchQuery, page: u32) -> Result<Listing<PerfumeSummary>, ClientError> {
+        // Through the application interface when a session of it is held and the query can
+        // be expressed there; the search of the web site otherwise.
+        if self.has_app_session()
+            && let Some(listing) = self.app_search_perfumes(q, page).await?
+        {
+            return Ok(listing);
+        }
         let text = q.text.as_deref().map(str::trim).filter(|t| !t.is_empty());
         let has_criteria = text.is_some()
             || q.brand.is_some()
