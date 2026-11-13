@@ -28,7 +28,7 @@ const PERFUMER_PAGE: &str = include_str!("fixtures/perfumer.html");
 /// The only call the tests expect for the recorded perfumer, page aside: the one the
 /// application makes when it opens the page of a perfumer.
 fn details(page: u32) -> String {
-    format!("/app/v1/perfumer_details?pf_id=509&page={page}&per_page=20&o=v_desc&g_f=1&g_m=1&g_u=1")
+    format!("/app/v1/perfumer_details?pf_id=509&page={page}&per_page=20&o=nr_desc&g_f=1&g_m=1&g_u=1")
 }
 
 /// Not recorded, built for the tests from the recorded answer: a listing longer than the
@@ -198,7 +198,7 @@ async fn a_perfumer_never_met_is_read_from_the_web_page() {
 async fn a_long_listing_stops_where_the_application_stops() {
     let (c, site) = client(true).await;
     let p = c.get_perfumer("510", 50).await.unwrap();
-    assert_eq!(site.asked.lock().unwrap().as_slice(), ["/app/v1/perfumer_details?pf_id=510&page=50&per_page=20&o=v_desc&g_f=1&g_m=1&g_u=1"]);
+    assert_eq!(site.asked.lock().unwrap().as_slice(), ["/app/v1/perfumer_details?pf_id=510&page=50&per_page=20&o=nr_desc&g_f=1&g_m=1&g_u=1"]);
     // Every creation is counted, but the pages end at the thousandth row, as on the web site.
     assert_eq!((p.perfumes.page, p.perfumes.total_items, p.perfumes.total_pages), (50, Some(43518), Some(50)));
 }

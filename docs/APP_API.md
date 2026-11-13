@@ -62,7 +62,7 @@ was recorded; its shape is in the appendix.
 | --- | --- | --- |
 | `GET /search` | `filter` (the words), `pin` | yes |
 | `GET /perfume_details/{id}` | — | yes |
-| `GET /similar` | `action=list`, `type=similar`, `p_id`, `limit` | yes |
+| `GET /similar` | `action=list`, `type=similar` or `layer` (layering), `p_id`, `limit` (the application asks 30) | yes |
 | `GET /similar` | `action=detail`, `type`, `p_id`, `s_id` | yes |
 | `GET /similar` | `action=search`, `type`, `p_id`, `query` | no |
 | `GET /rating_details/{id}/{scent\|durability\|sillage\|bottle\|pricing}` | `offset`, `sort` | yes |
@@ -173,6 +173,10 @@ stay on the web pages.
   `GET /search` (notes by id, votes, classification counters), under other names
   (`p_name`, `p_release_year`, `b_name_url`…).
 - Sort orders (`o`) read in the application: `nr_desc`, `v_desc`, `n_asc`, `n_desc`.
+  `nr_desc` (the most rated first, the order of the web pages) was measured on
+  `/perfumes`, `/brand_details` and `/perfumer_details`; without `o` the last two answer
+  by name.
+- A number no brand has gets `{"error":"Brand not found"}` with status 200.
 - `GET /search` answers with up to 20 perfumes plus the brands and notes that match the
   words; it takes no filter.
 

@@ -68,15 +68,23 @@ impl ParfumoClient {
         Ok(found)
     }
 
-    /// The record of a brand and one page of its perfumes (`GET /brand_details`), in the
-    /// order of the interface: by name, where the web page lists the most rated first.
+    /// The record of a brand and one page of its perfumes (`GET /brand_details`), the most
+    /// rated first, as on the web page (measured: without an order they come by name).
     /// `None` when the interface cannot tell which brand is meant: the caller then reads
     /// the web page.
     pub(crate) async fn app_get_brand(&self, r: &str, page: u32) -> Result<Option<BrandPage>, ClientError> {
         let Some(b_id) = self.app_brand_number(r).await? else { return Ok(None) };
         let page = page.max(1);
         // Without a gender the listing must be asked for all three.
-        let params = [pair("b_id", b_id), pair("page", page), pair("per_page", PER_PAGE), pair("g_f", 1), pair("g_m", 1), pair("g_u", 1)];
+        let params = [
+            pair("b_id", b_id),
+            pair("page", page),
+            pair("per_page", PER_PAGE),
+            pair("o", "nr_desc"),
+            pair("g_f", 1),
+            pair("g_m", 1),
+            pair("g_u", 1),
+        ];
         let answer = self.app_get("/brand_details", &params).await?;
         let outdated = |what: &str| ClientError::ParserOutdated(format!("/app/v1/brand_details: {what}"));
         // No brand in the answer, or another one than asked: a number no brand has. What the

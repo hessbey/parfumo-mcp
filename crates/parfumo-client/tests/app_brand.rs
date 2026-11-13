@@ -17,7 +17,7 @@ use axum::{
 };
 use parfumo_client::{ClientConfig, ClientError, GlobalLimiter, ParfumoClient};
 
-/// `GET /brand_details?b_id=253&page=1&per_page=20&g_f=1&g_m=1&g_u=1`, trimmed to five rows.
+/// `GET /brand_details?b_id=253&page=1&per_page=20&o=nr_desc&g_f=1&g_m=1&g_u=1`, trimmed to five rows.
 const BRAND_DETAILS: &str = include_str!("fixtures/app_brand_details.json");
 /// `GET /search?filter=creed`: two brands, Creed (253) and Goose Creek (15598).
 const SEARCH_CREED: &str = include_str!("fixtures/app_search_creed.json");
@@ -27,7 +27,7 @@ const SEARCH_DIGITS: &str =
 /// Not recorded either: what is assumed of a number no brand has.
 const NO_BRAND: &str = r#"{"b":null,"p":{"matches":0,"rows":[]}}"#;
 
-const FIRST_PAGE_OF_CREED: &str = "/app/v1/brand_details?b_id=253&page=1&per_page=20&g_f=1&g_m=1&g_u=1";
+const FIRST_PAGE_OF_CREED: &str = "/app/v1/brand_details?b_id=253&page=1&per_page=20&o=nr_desc&g_f=1&g_m=1&g_u=1";
 
 struct Site {
     /// Path and query of every request, in order.
@@ -141,7 +141,7 @@ async fn an_address_a_path_and_a_name_reach_the_brand_and_the_page_asked_is_pass
     let (c, site) = logged_in().await;
     // An address of a perfume of the brand, with a query: the brand is its first part.
     c.get_brand(&format!("{}/Perfumes/Creed/aventus?x=1", c.base_url()), 3).await.unwrap();
-    assert_eq!(site.take(), ["/app/v1/search?filter=Creed", "/app/v1/brand_details?b_id=253&page=3&per_page=20&g_f=1&g_m=1&g_u=1"]);
+    assert_eq!(site.take(), ["/app/v1/search?filter=Creed", "/app/v1/brand_details?b_id=253&page=3&per_page=20&o=nr_desc&g_f=1&g_m=1&g_u=1"]);
 
     // The letter case of a slug does not matter.
     for (reference, words) in [("/Perfumes/creed/", "creed"), ("Perfumes/CREED", "CREED")] {
@@ -156,7 +156,7 @@ async fn an_address_a_path_and_a_name_reach_the_brand_and_the_page_asked_is_pass
         let asked = site.take();
         assert_eq!(asked.len(), 2, "{asked:?}");
         assert!(asked[0].eq_ignore_ascii_case("/app/v1/search?filter=goose+creek"), "{asked:?}");
-        assert_eq!(asked[1], "/app/v1/brand_details?b_id=15598&page=1&per_page=20&g_f=1&g_m=1&g_u=1");
+        assert_eq!(asked[1], "/app/v1/brand_details?b_id=15598&page=1&per_page=20&o=nr_desc&g_f=1&g_m=1&g_u=1");
     }
 }
 
@@ -168,7 +168,7 @@ async fn a_number_is_the_number_of_the_brand_unless_a_brand_is_named_by_these_di
 
     // On the web site `4711` is the slug of a brand, not the brand number 4711.
     c.get_brand("1234", 1).await.unwrap();
-    assert_eq!(site.take(), ["/app/v1/search?filter=1234", "/app/v1/brand_details?b_id=99&page=1&per_page=20&g_f=1&g_m=1&g_u=1"]);
+    assert_eq!(site.take(), ["/app/v1/search?filter=1234", "/app/v1/brand_details?b_id=99&page=1&per_page=20&o=nr_desc&g_f=1&g_m=1&g_u=1"]);
 
     // An answer without a brand is not an empty page.
     assert_eq!(c.get_brand("999999", 1).await.unwrap_err(), ClientError::NotFound("brand 999999".into()));
@@ -177,7 +177,7 @@ async fn a_number_is_the_number_of_the_brand_unless_a_brand_is_named_by_these_di
     assert_eq!(c.get_brand("777", 1).await.unwrap_err(), ClientError::NotFound("brand 777".into()));
     site.take();
     assert!(matches!(c.get_brand("404404", 1).await.unwrap_err(), ClientError::NotFound(_)));
-    assert_eq!(site.take(), ["/app/v1/search?filter=404404", "/app/v1/brand_details?b_id=404404&page=1&per_page=20&g_f=1&g_m=1&g_u=1"]);
+    assert_eq!(site.take(), ["/app/v1/search?filter=404404", "/app/v1/brand_details?b_id=404404&page=1&per_page=20&o=nr_desc&g_f=1&g_m=1&g_u=1"]);
 }
 
 #[tokio::test]
@@ -186,7 +186,7 @@ async fn the_brand_of_a_reference_is_looked_up_once() {
     // A listing is read page after page: only the first one costs a search.
     let first = c.get_brand("creed", 1).await.unwrap();
     c.get_brand("creed", 2).await.unwrap();
-    let page = |n: u32| format!("/app/v1/brand_details?b_id=253&page={n}&per_page=20&g_f=1&g_m=1&g_u=1");
+    let page = |n: u32| format!("/app/v1/brand_details?b_id=253&page={n}&per_page=20&o=nr_desc&g_f=1&g_m=1&g_u=1");
     assert_eq!(site.take(), ["/app/v1/search?filter=creed".to_string(), page(1), page(2)]);
 
     // The id and the address handed back are those of the site: they name the brand without a search.

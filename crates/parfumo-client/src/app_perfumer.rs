@@ -14,9 +14,9 @@ use crate::{
 const PER_PAGE: u32 = 20;
 /// The application never asks for more rows of one listing, and the web site shows no more.
 const MAX_ROWS: u64 = 1000;
-/// The order in which the application opens the page of a perfumer: the best rated scents
-/// first. Without an order the creations come by name, which buries the known ones.
-const ORDER: &str = "v_desc";
+/// The order of the web page: the most rated first (measured: the interface accepts it
+/// here). Without an order the creations come by name, which buries the known ones.
+const ORDER: &str = "nr_desc";
 
 fn pair(k: &str, v: impl ToString) -> (String, String) {
     (k.to_string(), v.to_string())
