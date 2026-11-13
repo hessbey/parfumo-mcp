@@ -1,6 +1,10 @@
 //! The page of a perfumer through the application interface, against an answer recorded on
 //! the real site (`tests/fixtures/app_perfumer_details.json`). A local fake serves it, and
 //! the web page of a perfumer, and records what is asked.
+//!
+//! The answer was recorded without an order (`o`), so its rows come by name. The client asks
+//! with the order the application sends: the tests check the call and the mapping of the
+//! rows, never their order.
 
 use std::{
     sync::{Arc, Mutex},
@@ -21,9 +25,29 @@ const PERFUME_DETAILS: &str = include_str!("fixtures/app_perfume_details.json");
 /// The web page of another perfumer.
 const PERFUMER_PAGE: &str = include_str!("fixtures/perfumer.html");
 
-/// The only call the tests expect for the recorded perfumer, page aside.
+/// The only call the tests expect for the recorded perfumer, page aside: the one the
+/// application makes when it opens the page of a perfumer.
 fn details(page: u32) -> String {
-    format!("/app/v1/perfumer_details?pf_id=509&page={page}&per_page=20&g_f=1&g_m=1&g_u=1")
+    format!("/app/v1/perfumer_details?pf_id=509&page={page}&per_page=20&o=v_desc&g_f=1&g_m=1&g_u=1")
+}
+
+/// Not recorded, built for the tests from the recorded answer: a listing longer than the
+/// thousand rows the application reads.
+fn long_listing() -> String {
+    let mut answer: serde_json::Value = serde_json::from_str(PERFUMER_DETAILS).unwrap();
+    answer["p"]["matches"] = serde_json::json!(43518);
+    answer.to_string()
+}
+
+/// Not recorded, built for the tests from the recorded record of a perfume: one made by two
+/// perfumers who bear the same name. Their numbers, slugs and name are made up.
+fn namesakes() -> String {
+    let mut record: serde_json::Value = serde_json::from_str(PERFUME_DETAILS).unwrap();
+    record["p"]["perfumers_array"] = serde_json::json!([
+        {"id": "7001", "name": "Tést Namesake", "name_url": "Tst_Namesake"},
+        {"id": "7002", "name": "Tést Namesake", "name_url": "Tst_Namesake_2"},
+    ]);
+    record.to_string()
 }
 
 #[derive(Default)]
@@ -47,8 +71,10 @@ async fn handler(State(site): State<Arc<Site>>, uri: Uri, headers: HeaderMap, _b
     }
     match uri.path() {
         "/app/v1/perfumer_details" if asked.contains("pf_id=509&") => json(PERFUMER_DETAILS),
+        "/app/v1/perfumer_details" if asked.contains("pf_id=510&") => json(&long_listing()),
         // Not recorded: what the site answers for a number no perfumer has. Assumed here: no perfumer, no row.
         "/app/v1/perfumer_details" => json(r#"{"pf":null,"p":{"matches":0,"rows":[]}}"#),
+        "/app/v1/perfume_details/2" => json(&namesakes()),
         path if path.starts_with("/app/v1/perfume_details/") => json(PERFUME_DETAILS),
         _ => (StatusCode::NOT_FOUND, r#"{"error":"Not found"}"#).into_response(),
     }
@@ -161,6 +187,20 @@ async fn a_perfumer_never_met_is_read_from_the_web_page() {
     // A number inside an address is a slug, not the number of a perfumer.
     c.get_perfumer("/Perfumers/509", 1).await.unwrap();
     assert_eq!(site.asked.lock().unwrap().last().unwrap(), "/Perfumers/509");
+    // Nor is zero, or a number too long to be one.
+    for not_a_number in ["0", "99999999999999999999999"] {
+        c.get_perfumer(not_a_number, 1).await.unwrap();
+        assert_eq!(site.asked.lock().unwrap().last().unwrap(), &format!("/Perfumers/{not_a_number}"));
+    }
+}
+
+#[tokio::test]
+async fn a_long_listing_stops_where_the_application_stops() {
+    let (c, site) = client(true).await;
+    let p = c.get_perfumer("510", 50).await.unwrap();
+    assert_eq!(site.asked.lock().unwrap().as_slice(), ["/app/v1/perfumer_details?pf_id=510&page=50&per_page=20&o=v_desc&g_f=1&g_m=1&g_u=1"]);
+    // Every creation is counted, but the pages end at the thousandth row, as on the web site.
+    assert_eq!((p.perfumes.page, p.perfumes.total_items, p.perfumes.total_pages), (50, Some(43518), Some(50)));
 }
 
 #[tokio::test]
@@ -179,4 +219,30 @@ async fn an_answer_without_a_perfumer_is_not_found() {
     // Nothing was learnt from it.
     let _ = c.get_perfumer("/Perfumers/999999", 1).await;
     assert_eq!(site.asked.lock().unwrap().last().unwrap(), "/Perfumers/999999");
+}
+
+#[tokio::test]
+async fn an_address_is_only_found_by_its_slug_and_a_name_borne_by_two_is_left_to_the_web_site() {
+    let (c, site) = client(true).await;
+    c.get_perfume("9438").await.unwrap();
+    c.get_perfume("2").await.unwrap();
+    site.asked.lock().unwrap().clear();
+    let last = |site: &Site| site.asked.lock().unwrap().last().cloned().unwrap();
+
+    // An address names a slug. One never met is another page of the site, even when it reads
+    // like the name of a perfumer met: the web page is read, not the page of that perfumer.
+    c.get_perfumer("/Perfumers/Jean-Christophe_Hérault", 1).await.unwrap();
+    assert_eq!(last(&site), "/Perfumers/Jean-Christophe_H%C3%A9rault");
+    c.get_perfumer(&format!("{}/Perfumers/Tst_Namesake_3", c.base_url()), 1).await.unwrap();
+    assert_eq!(last(&site), "/Perfumers/Tst_Namesake_3");
+
+    // Each slug has its own number.
+    let _ = c.get_perfumer("Tst_Namesake", 1).await;
+    assert!(last(&site).starts_with("/app/v1/perfumer_details?pf_id=7001&"), "{}", last(&site));
+    let _ = c.get_perfumer("/Perfumers/Tst_Namesake_2", 1).await;
+    assert!(last(&site).starts_with("/app/v1/perfumer_details?pf_id=7002&"), "{}", last(&site));
+
+    // The name tells neither from the other: the web site chooses, as it does without a session.
+    c.get_perfumer("Tést Namesake", 1).await.unwrap();
+    assert_eq!(last(&site), "/Perfumers/T%C3%A9st_Namesake");
 }
