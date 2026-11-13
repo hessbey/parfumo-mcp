@@ -2,6 +2,7 @@
 //! Independent of MCP. See `docs/DISCOVERY.md` for the measured behaviour of the site.
 
 mod account;
+mod app;
 mod client;
 mod error;
 mod forum;

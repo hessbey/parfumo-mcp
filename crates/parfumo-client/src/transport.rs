@@ -160,6 +160,15 @@ impl Jar {
         self.lock().iter().any(|c| c.name == name && !c.value.is_empty())
     }
 
+    /// The value stored under exactly this name and domain.
+    pub(crate) fn value(&self, name: &str, domain: &str) -> Option<String> {
+        self.lock().iter().find(|c| c.name == name && c.domain == domain).map(|c| c.value.clone()).filter(|v| !v.is_empty())
+    }
+
+    pub(crate) fn forget(&self, name: &str, domain: &str) {
+        self.lock().retain(|c| !(c.name == name && c.domain == domain));
+    }
+
     fn store_header(&self, header: &str, host: &str) {
         let mut parts = header.split(';');
         let Some((name, value)) = parts.next().and_then(|nv| nv.split_once('=')) else { return };
@@ -322,10 +331,14 @@ impl Transport {
         method: &Method,
         path_and_query: &str,
         form: Option<&[(String, String)]>,
+        bearer: Option<&str>,
     ) -> Result<(RawResponse, Option<u64>, bool), reqwest::Error> {
         self.throttle().await;
         let url = self.absolute(path_and_query);
         let mut req = self.http.request(method.clone(), url);
+        if let Some(token) = bearer {
+            req = req.bearer_auth(token);
+        }
         if let Some(form) = form {
             req = req.form(form);
         }
@@ -350,10 +363,22 @@ impl Transport {
         form: Option<&[(String, String)]>,
         max_retries: u32,
     ) -> Result<RawResponse, ClientError> {
+        self.send_with(method, path_and_query, form, max_retries, None).await
+    }
+
+    /// [`Self::send`] with an `Authorization: Bearer` header (the application interface).
+    pub async fn send_with(
+        &self,
+        method: Method,
+        path_and_query: &str,
+        form: Option<&[(String, String)]>,
+        max_retries: u32,
+        bearer: Option<&str>,
+    ) -> Result<RawResponse, ClientError> {
         let path = parse::url_path(path_and_query).to_string();
         let mut attempt = 0u32;
         loop {
-            let outcome = self.send_once(&method, path_and_query, form).await;
+            let outcome = self.send_once(&method, path_and_query, form, bearer).await;
             let (failure, retry_after) = match outcome {
                 Ok((raw, retry_after, challenge_header)) => {
                     let status = raw.status;
