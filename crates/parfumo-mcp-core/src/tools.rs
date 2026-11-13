@@ -78,46 +78,84 @@ impl Clients {
     }
 }
 
+/// How a user links the Parfumo account, which messages to the assistant repeat.
+#[derive(Clone)]
+pub enum LinkHow {
+    /// HTTP server: the address of its `/link` page.
+    Page(String),
+    /// Stdio server whose account comes from the environment of the process.
+    Environment,
+    /// Stdio server with a login page of its own, opened on demand: the function returns
+    /// its address, or `None` when the page cannot be opened. It is only called when a
+    /// message is about to tell the user to link an account.
+    LocalPage(std::sync::Arc<dyn Fn() -> Option<String> + Send + Sync>),
+}
+
 #[derive(Clone)]
 pub struct ParfumoTools {
     pub(crate) state: AppState,
     /// Stdio server: the single local user every call belongs to. `None` on the HTTP
     /// server, where each request carries its own authenticated user.
     pub(crate) local: Option<crate::db::User>,
-    /// HTTP server: the page where a user links a Parfumo account. `None` on the stdio
-    /// server, where the account comes from the environment.
-    pub(crate) link_page: Option<String>,
+    pub(crate) link_how: LinkHow,
 }
 
 impl ParfumoTools {
     /// Tools of the HTTP server: the caller is the authenticated user of each request, and
     /// `link_page` is the address where a user links a Parfumo account.
     pub fn remote(state: AppState, link_page: String) -> Self {
-        Self { state, local: None, link_page: Some(link_page) }
+        Self { state, local: None, link_how: LinkHow::Page(link_page) }
     }
 
     /// Tools of the stdio server: no authentication, every call belongs to `user`, whose
-    /// Parfumo account comes from the environment of the process.
-    pub fn local(state: AppState, user: crate::db::User) -> Self {
-        Self { state, local: Some(user), link_page: None }
+    /// Parfumo account is linked as `link_how` says.
+    pub fn local(state: AppState, user: crate::db::User, link_how: LinkHow) -> Self {
+        Self { state, local: Some(user), link_how }
     }
 
-    /// Enrolment page of the HTTP server; the stdio server has none.
+    /// The page where the user links the account, when there is one.
     pub(crate) fn link_page(&self) -> Option<String> {
-        self.link_page.clone()
-    }
-
-    /// How the user links or relinks the Parfumo account, as the end of a sentence:
-    /// "at <the /link page>", or "by setting <environment variables>" on the stdio server.
-    pub(crate) fn link_url(&self) -> String {
-        match self.link_page() {
-            Some(url) => format!("at {url}"),
-            None => crate::sessions::LOCAL_LINK_HOW.to_string(),
+        match &self.link_how {
+            LinkHow::Page(url) => Some(url.clone()),
+            LinkHow::Environment => None,
+            LinkHow::LocalPage(open) => open(),
         }
     }
 
+    /// The same for `parfumo_session_status`: a local login page is only opened when the
+    /// account has to be linked (again).
+    pub(crate) fn status_link_page(&self, must_link: bool) -> Option<String> {
+        match &self.link_how {
+            LinkHow::LocalPage(_) if !must_link => None,
+            _ => self.link_page(),
+        }
+    }
+
+    /// How the user links or relinks the Parfumo account, as the end of a sentence:
+    /// "at <the page>", or "by setting <environment variables>".
+    pub(crate) fn link_url(&self) -> String {
+        use crate::sessions::{LOCAL_LINK_HOW, LOCAL_LOGIN_HOW, LOCAL_PAGE_NOTE};
+        match &self.link_how {
+            LinkHow::Page(url) => format!("at {url}"),
+            LinkHow::Environment => LOCAL_LINK_HOW.to_string(),
+            LinkHow::LocalPage(open) => match open() {
+                Some(url) => format!("at {url} — {LOCAL_PAGE_NOTE}"),
+                None => LOCAL_LOGIN_HOW.to_string(),
+            },
+        }
+    }
+
+    /// The link is only worked out for the errors whose message gives it: a local login
+    /// page is not opened for a perfume that does not exist.
     pub(crate) fn client_err(&self, e: parfumo_client::ClientError) -> ToolError {
-        ToolError::from_client(e, &self.link_url())
+        use parfumo_client::ClientError as E;
+        let link = if matches!(e, E::CaptchaRequired | E::InvalidCredentials | E::LoginRequired) { self.link_url() } else { String::new() };
+        ToolError::from_client(e, &link)
+    }
+
+    pub(crate) fn session_err(&self, e: crate::sessions::SessionError) -> ToolError {
+        let link = if matches!(e, crate::sessions::SessionError::Internal(_)) { String::new() } else { self.link_url() };
+        ToolError::from_session(e, &link)
     }
 
     /// Common path of every tool: authenticated user, that user's own Parfumo client,
@@ -148,15 +186,14 @@ impl ParfumoTools {
     {
         let user = caller.0.clone();
         let started = Instant::now();
-        let link = self.link_url();
         let sessions = &self.state.sessions;
         let writes = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
         let outcome = async {
-            let public = sessions.public_client_for(user.id).map_err(|e| ToolError::from_session(e, &link))?;
-            let account = sessions.account_client(user.id).await.map_err(|e| ToolError::from_session(e, &link))?;
+            let public = sessions.public_client_for(user.id).map_err(|e| self.session_err(e))?;
+            let account = sessions.account_client(user.id).await.map_err(|e| self.session_err(e))?;
             match f(Clients { account, public: public.clone(), user_id: user.id, writes: writes.clone() }).await {
                 Err(e) if e.code == crate::errors::ErrorCode::ReauthRequired => {
-                    let account = sessions.renew(user.id).await.map_err(|e| ToolError::from_session(e, &link))?;
+                    let account = sessions.renew(user.id).await.map_err(|e| self.session_err(e))?;
                     f(Clients { account, public, user_id: user.id, writes: writes.clone() }).await
                 }
                 other => other,

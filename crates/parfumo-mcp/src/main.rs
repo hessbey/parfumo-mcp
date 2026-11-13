@@ -1,16 +1,20 @@
 //! parfumo-mcp: local MCP server for Parfumo over stdio.
 //!
 //! Same 48 tools as the HTTP server `parfumo-mcp-server`, for one person on their own machine:
-//! no port, no OAuth, no users, no `/link` page. The single Parfumo account is read from
-//! the environment (`PARFUMO_USER` + `PARFUMO_PASSWORD`, or `PARFUMO_COOKIE`); without
-//! one, the public tools still work. Cache, session cookies, audit log and daily counts
-//! live in a local SQLite file.
+//! no OAuth, no users. The single Parfumo account is linked on a login page that the
+//! binary opens on 127.0.0.1 when it is needed (`login`), or read from the environment
+//! (`PARFUMO_USER` + `PARFUMO_PASSWORD`, or `PARFUMO_COOKIE`); without one, the public
+//! tools still work. Cache, session cookies, audit log and daily counts live in a local
+//! SQLite file.
 //!
 //! Standard output carries the MCP protocol and nothing else: logs go to standard error.
+
+mod login;
 
 use std::{
     path::{Path, PathBuf},
     process::ExitCode,
+    sync::Arc,
     time::Duration,
 };
 
@@ -20,9 +24,9 @@ use parfumo_mcp_core::{
     config::{self, Config},
     crypto::{self, MasterKey},
     db::{Db, User},
-    sessions::LocalAccount,
+    sessions::{self, LocalAccount},
     state::AppState,
-    tools::ParfumoTools,
+    tools::{LinkHow, ParfumoTools},
 };
 use rmcp::ServiceExt;
 
@@ -33,13 +37,16 @@ const LOCAL_USER: &str = "local";
 #[command(
     name = "parfumo-mcp",
     version,
-    about = "Local MCP server for Parfumo over stdio (one account, read from the environment)",
-    after_help = "Environment:\n  \
-        PARFUMO_USER, PARFUMO_PASSWORD  Parfumo account (credentials mode), or\n  \
-        PARFUMO_COOKIE                  `pf_auth=…` cookie of a logged-in browser (cookie mode)\n  \
+    about = "Local MCP server for Parfumo over stdio (one account, linked with `parfumo-mcp login`)",
+    after_help = "Parfumo account: run `parfumo-mcp login`, or let the assistant give you the link of the\n\
+        login page the first time a tool needs the account. Without an account, the public tools\n\
+        still work.\n\n\
+        Environment:\n  \
         PARFUMO_MCP_DB                  local SQLite file (default: user data directory)\n  \
-        PARFUMO_MCP_PUBLIC_WRITES       `true` really sends writes other members can see\n\
-        Without an account, the public tools still work. Other PARFUMO_MCP_* settings: see the README.\n\n\
+        PARFUMO_MCP_PUBLIC_WRITES       `true` really sends writes other members can see\n  \
+        PARFUMO_USER, PARFUMO_PASSWORD  account given by the environment instead of the login page\n  \
+        PARFUMO_COOKIE                  the same, with the `pf_auth=…` cookie of a logged-in browser\n\
+        Other PARFUMO_MCP_* settings: see the README.\n\n\
         Without a subcommand, the binary serves MCP over standard input and output."
 )]
 struct Cli {
@@ -73,6 +80,14 @@ enum Command {
         #[arg(long, default_value_t = 50)]
         limit: u32,
     },
+    /// Link a Parfumo account on a page of this computer, opened in your browser.
+    Login {
+        /// Only print the address of the page, without opening a browser.
+        #[arg(long)]
+        no_browser: bool,
+    },
+    /// Erase the Parfumo account stored on this computer.
+    Logout,
 }
 
 /// The local database file: `PARFUMO_MCP_DB` when set, the default file otherwise. The
@@ -198,10 +213,16 @@ async fn serve(tools: ParfumoTools, db: Db) -> Result<(), String> {
     service.waiting().await.map(|_| ()).map_err(|e| e.to_string())
 }
 
-fn run() -> Result<(), String> {
-    if let Some(Command::Audit { tool, since, writes, errors, stats, json, limit }) = Cli::parse().command {
-        return audit_command(&AuditOptions { user: None, tool, since, writes, errors, stats, json, limit });
-    }
+/// What every command but `audit` works on: the local database, its single user, and the
+/// account the environment gives, if any.
+struct Local {
+    state: AppState,
+    db: Db,
+    user: User,
+    account: Option<LocalAccount>,
+}
+
+fn open_local() -> Result<Local, String> {
     let var = |name: &str| std::env::var(name).ok();
     // Logs on standard error only: standard output is the protocol channel.
     use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -227,24 +248,97 @@ fn run() -> Result<(), String> {
     let key = master_key(&cfg.db_path, var)?;
     db.purge().map_err(|e| e.to_string())?;
     let user = local_user(&db)?;
+    Ok(Local { state: AppState::new(cfg, db.clone(), key), db, user, account })
+}
 
-    let state = AppState::new(cfg, db.clone(), key);
+fn runtime() -> Result<tokio::runtime::Runtime, String> {
+    tokio::runtime::Builder::new_multi_thread().enable_all().build().map_err(|e| e.to_string())
+}
+
+/// `parfumo-mcp login`: opens the login page and waits until an account is linked. A
+/// server that is already running finds the account at its next tool call.
+fn login_command(no_browser: bool) -> Result<(), String> {
+    let local = open_local()?;
+    if local.account.is_some() {
+        return Err(format!(
+            "the Parfumo account is given by {}, {} or {}: remove these variables to use the login page",
+            sessions::ENV_LOCAL_USER,
+            sessions::ENV_LOCAL_PASSWORD,
+            sessions::ENV_LOCAL_COOKIE
+        ));
+    }
+    runtime()?.block_on(async {
+        let page = login::LoginPage::new(local.state.sessions.clone(), local.user.id);
+        let url = page.url().ok_or("the login page could not be opened on 127.0.0.1")?;
+        println!("Link your Parfumo account on this page, open on this computer for ten minutes:\n\n  {url}\n");
+        if !no_browser && !login::open_browser(&url) {
+            println!("No browser could be started: open the address above yourself.");
+        }
+        match page.ended().await {
+            login::Ending::Linked => {
+                println!("Your Parfumo account is linked.");
+                Ok(())
+            }
+            _ => Err("the login page closed after ten minutes without an account being linked".to_string()),
+        }
+    })
+}
+
+/// `parfumo-mcp logout`: erases the stored account.
+fn logout_command() -> Result<(), String> {
+    let local = open_local()?;
+    let was_linked = local.state.sessions.unlink(local.user.id).map_err(|e| e.to_string())?;
+    println!(
+        "{}",
+        if was_linked {
+            "The Parfumo account is unlinked: the credentials and cookies stored on this computer are erased."
+        } else {
+            "No Parfumo account was linked."
+        }
+    );
+    if local.account.is_some() {
+        println!("An account is still given by the PARFUMO_* variables of the environment: remove them too.");
+    }
+    Ok(())
+}
+
+fn run() -> Result<(), String> {
+    match Cli::parse().command {
+        Some(Command::Audit { tool, since, writes, errors, stats, json, limit }) => {
+            return audit_command(&AuditOptions { user: None, tool, since, writes, errors, stats, json, limit });
+        }
+        Some(Command::Login { no_browser }) => return login_command(no_browser),
+        Some(Command::Logout) => return logout_command(),
+        None => {}
+    }
+    let Local { state, db, user, account } = open_local()?;
     let changed = state.sessions.sync_local_link(user.id, account.as_ref()).map_err(|e| e.to_string())?;
+    let linked = state.sessions.link_info(user.id).map_err(|e| e.to_string())?.is_some();
     tracing::info!(
         version = env!("CARGO_PKG_VERSION"),
         db = %state.cfg.db_path.display(),
-        account = match &account {
-            Some(LocalAccount::Credentials(_)) => "credentials",
-            Some(LocalAccount::Cookie(_)) => "cookie",
-            None => "none (public tools only)",
+        account = match (&account, linked) {
+            (Some(LocalAccount::Credentials(_)), _) => "credentials, from the environment",
+            (Some(LocalAccount::Cookie(_)), _) => "cookie, from the environment",
+            (None, true) => "linked on the login page",
+            (None, false) => "none yet (public tools only; the login page opens when a tool needs the account)",
         },
         account_changed = changed,
         public_writes = state.cfg.public_writes,
         "parfumo-mcp ready"
     );
 
-    let tools = ParfumoTools::local(state, user);
-    tokio::runtime::Builder::new_multi_thread().enable_all().build().map_err(|e| e.to_string())?.block_on(serve(tools, db))
+    // An account of the environment is changed there; otherwise on the login page, which
+    // is opened the first time a message tells the user to link an account.
+    let link_how = match account {
+        Some(_) => LinkHow::Environment,
+        None => {
+            let page = login::LoginPage::new(state.sessions.clone(), user.id);
+            LinkHow::LocalPage(Arc::new(move || page.url()))
+        }
+    };
+    let tools = ParfumoTools::local(state, user, link_how);
+    runtime()?.block_on(serve(tools, db))
 }
 
 fn main() -> ExitCode {

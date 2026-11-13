@@ -23,7 +23,7 @@ des parfums, votre collection, vos ports, vos notes et avis, et la partie commun
 
   | Binaire | Transport | Pour qui |
   | --- | --- | --- |
-  | `parfumo-mcp` | stdio | Une personne, sur sa machine. Ni port, ni OAuth, rien à héberger |
+  | `parfumo-mcp` | stdio | Une personne, sur sa machine. Rien à héberger, pas d'OAuth |
   | `parfumo-mcp-server` | Streamable HTTP | Plusieurs personnes, comptes isolés, sur un serveur derrière HTTPS (image Docker) |
 
 - **Prudent par défaut.** Chaque outil d'écriture accepte `dry_run` et relit l'état réel.
@@ -36,10 +36,10 @@ des parfums, votre collection, vos ports, vos notes et avis, et la partie commun
   et classements. Aucune résolution de captcha, aucun contournement de Cloudflare.
 - **Vise `www.parfumo.com`, le site en anglais.** Le site allemand `www.parfumo.de` utilise
   d'autres adresses et d'autres libellés et n'est pas pris en charge.
-- **Les secrets restent hors de la conversation.** Les identifiants viennent de
-  l'environnement (stdio) ou d'une page web `/link` (HTTP), sont chiffrés au repos en
-  AES-256-GCM et n'apparaissent jamais dans les journaux, les erreurs ou les résultats
-  d'outils.
+- **Les secrets restent hors de la conversation.** Les identifiants se saisissent sur une
+  page de connexion — sur votre propre ordinateur (stdio) ou sur la page `/link` du serveur
+  (HTTP) —, sont chiffrés au repos en AES-256-GCM et n'apparaissent jamais dans les journaux,
+  les erreurs ou les résultats d'outils.
 
 ## Démarrage rapide (local)
 
@@ -51,9 +51,7 @@ prêt à l'emploi sous Linux, macOS et Windows. Pour le compiler vous-même, voi
 Ajoutez-le à Claude Code :
 
 ```sh
-claude mcp add parfumo \
-  -e PARFUMO_COOKIE='pf_auth=…' \
-  -- /chemin/vers/parfumo-mcp
+claude mcp add parfumo -- /chemin/vers/parfumo-mcp
 ```
 
 Ou à tout client configuré par un fichier JSON (Claude Desktop et la plupart des autres) :
@@ -61,17 +59,16 @@ Ou à tout client configuré par un fichier JSON (Claude Desktop et la plupart d
 ```json
 {
   "mcpServers": {
-    "parfumo": {
-      "command": "/chemin/vers/parfumo-mcp",
-      "env": { "PARFUMO_COOKIE": "pf_auth=…" }
-    }
+    "parfumo": { "command": "/chemin/vers/parfumo-mcp" }
   }
 }
 ```
 
-`PARFUMO_COOKIE` est le cookie `pf_auth` copié depuis un navigateur connecté à Parfumo. Vous
-pouvez utiliser `PARFUMO_USER` et `PARFUMO_PASSWORD` à la place, ou rien du tout : sans
-compte, les outils publics fonctionnent quand même. Détail : [Usage local](docs/LOCAL.md).
+C'est tout : les outils publics fonctionnent aussitôt. La première fois qu'un outil a besoin
+de votre compte Parfumo, l'assistant vous donne le lien d'une page de connexion ouverte sur
+votre propre ordinateur ; vous pouvez aussi l'ouvrir vous-même avec `parfumo-mcp login`.
+Votre mot de passe se saisit là, jamais dans la conversation, et il est conservé chiffré sur
+votre ordinateur. Détail : [Usage local](docs/LOCAL.md).
 
 Pour l'héberger pour plusieurs personnes, voir [Hébergement](docs/HOSTING.md) : le serveur
 est publié sous forme d'image Docker, `ghcr.io/hessbey/parfumo-mcp-server`.

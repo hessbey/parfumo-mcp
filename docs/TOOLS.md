@@ -24,11 +24,14 @@ et les longs textes tronqués. Chaque coupe est signalée par une mention « omi
 documentation ». Rien d'autre n'a été modifié.
 
 **Binaire local `parfumo-mcp`.** Il expose ces 48 outils à l'identique : mêmes noms,
-mêmes paramètres, mêmes sorties. Trois écarts, tous liés à l'absence de page `/link` : les
-erreurs `not_linked`, `reauth_required` et `captcha_required` disent de régler `PARFUMO_USER`
-et `PARFUMO_PASSWORD` (ou `PARFUMO_COOKIE`) dans l'environnement du binaire au lieu de donner
-une adresse ; `parfumo_session_status` ne renvoie pas `link_url` ; et « l'utilisateur » est
-l'unique utilisateur local. Les exemples de ce document viennent du serveur HTTP.
+mêmes paramètres, mêmes sorties. Trois écarts, tous liés au compte : les erreurs
+`not_linked`, `reauth_required` et `captcha_required` donnent l'adresse de la page de
+connexion que le binaire ouvre sur l'ordinateur de l'utilisateur
+(`http://127.0.0.1:<port>/<secret>`, dix minutes) au lieu de celle de `/link` ;
+`parfumo_session_status` ne renvoie `link_url` que lorsqu'un compte est à relier ; et
+« l'utilisateur » est l'unique utilisateur local. Si le compte vient de l'environnement
+(`PARFUMO_USER` et `PARFUMO_PASSWORD`, ou `PARFUMO_COOKIE`), ces messages disent de régler ces
+variables et `link_url` est absent. Les exemples de ce document viennent du serveur HTTP.
 
 ## Conventions communes
 

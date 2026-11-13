@@ -499,7 +499,7 @@ fn authz_error(st: &ServerState, lang: Lang, p: &AuthorizeParams, e: AuthzError)
 }
 
 pub async fn authorize_get(State(st): State<ServerState>, headers: HeaderMap, Query(p): Query<AuthorizeParams>) -> Response {
-    let lang = Lang::choose(p.lang.as_deref(), &headers);
+    let lang = crate::i18n::choose(p.lang.as_deref(), &headers);
     match validate(&st, &p).await {
         Ok(client) => login_page(StatusCode::OK, lang, &p, &client, None),
         Err(e) => authz_error(&st, lang, &p, e),
@@ -507,7 +507,7 @@ pub async fn authorize_get(State(st): State<ServerState>, headers: HeaderMap, Qu
 }
 
 pub async fn authorize_post(State(st): State<ServerState>, headers: HeaderMap, Form(p): Form<AuthorizeParams>) -> Response {
-    let lang = Lang::choose(p.lang.as_deref(), &headers);
+    let lang = crate::i18n::choose(p.lang.as_deref(), &headers);
     if !origin_ok(&st.http, &headers) {
         return error_page(StatusCode::FORBIDDEN, lang, &origin_refused(&st.http, lang, "/oauth/authorize"));
     }

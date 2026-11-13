@@ -1467,7 +1467,7 @@ checksum = "7e036b411754132fd6b74e94b74e9a13c5cf606fa93d1885c35860d3060820b1"
 
 [[package]]
 name = "parfumo-client"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "axum",
  "governor",
@@ -1487,12 +1487,13 @@ dependencies = [
 
 [[package]]
 name = "parfumo-mcp"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "axum",
  "clap",
  "parfumo-mcp-core",
  "rmcp",
+ "serde",
  "serde_json",
  "tokio",
  "tracing",
@@ -1502,7 +1503,7 @@ dependencies = [
 
 [[package]]
 name = "parfumo-mcp-core"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "aes-gcm",
  "axum",
@@ -1526,7 +1527,7 @@ dependencies = [
 
 [[package]]
 name = "parfumo-mcp-server"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "axum",
  "clap",

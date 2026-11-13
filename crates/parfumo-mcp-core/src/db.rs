@@ -45,7 +45,12 @@ CREATE TABLE IF NOT EXISTS parfumo_links (
     cookies       BLOB,
     status        TEXT NOT NULL,
     linked_at     INTEGER NOT NULL,
-    last_login_at INTEGER
+    last_login_at INTEGER,
+    -- Changes each time an account is linked: a process that kept a session in memory
+    -- sees that another process linked a different account.
+    rev           TEXT NOT NULL DEFAULT '',
+    -- Stdio server: the account came from the environment of the process.
+    from_env      INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS oauth_clients (
     client_id     TEXT PRIMARY KEY,
@@ -149,6 +154,10 @@ pub struct LinkRow {
     pub status: String,
     pub linked_at: i64,
     pub last_login_at: Option<i64>,
+    /// Changes each time an account is linked.
+    pub rev: String,
+    /// Stdio server: the account came from the environment of the process.
+    pub from_env: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -238,6 +247,14 @@ impl Db {
         let has_family = conn.prepare("SELECT 1 FROM pragma_table_info('oauth_tokens') WHERE name = 'family'")?.exists([])?;
         if !has_family {
             conn.execute_batch("ALTER TABLE oauth_tokens ADD COLUMN family TEXT")?;
+        }
+        // Databases created before version 0.2 know neither column of the link.
+        let has_rev = conn.prepare("SELECT 1 FROM pragma_table_info('parfumo_links') WHERE name = 'rev'")?.exists([])?;
+        if !has_rev {
+            conn.execute_batch(
+                "ALTER TABLE parfumo_links ADD COLUMN rev TEXT NOT NULL DEFAULT '';
+                 ALTER TABLE parfumo_links ADD COLUMN from_env INTEGER NOT NULL DEFAULT 0;",
+            )?;
         }
         Ok(Self(Arc::new(Mutex::new(conn))))
     }
@@ -365,25 +382,40 @@ impl Db {
     pub fn link_get(&self, user_id: i64) -> Result<Option<LinkRow>, DbError> {
         Ok(self
             .conn()
-            .query_row("SELECT mode, secret, cookies, status, linked_at, last_login_at FROM parfumo_links WHERE user_id = ?1", [user_id], |r| {
-                Ok(LinkRow {
-                    mode: r.get(0)?,
-                    secret: r.get(1)?,
-                    cookies: r.get(2)?,
-                    status: r.get(3)?,
-                    linked_at: r.get(4)?,
-                    last_login_at: r.get(5)?,
-                })
-            })
+            .query_row(
+                "SELECT mode, secret, cookies, status, linked_at, last_login_at, rev, from_env FROM parfumo_links WHERE user_id = ?1",
+                [user_id],
+                |r| {
+                    Ok(LinkRow {
+                        mode: r.get(0)?,
+                        secret: r.get(1)?,
+                        cookies: r.get(2)?,
+                        status: r.get(3)?,
+                        linked_at: r.get(4)?,
+                        last_login_at: r.get(5)?,
+                        rev: r.get(6)?,
+                        from_env: r.get(7)?,
+                    })
+                },
+            )
             .optional()?)
     }
 
-    pub fn link_put(&self, user_id: i64, mode: &str, secret: Option<&[u8]>, cookies: Option<&[u8]>, status: &str) -> Result<(), DbError> {
+    /// Stores the link of a user, replacing any earlier one, and returns its new `rev`.
+    pub fn link_put(&self, user_id: i64, mode: &str, secret: Option<&[u8]>, cookies: Option<&[u8]>, status: &str) -> Result<String, DbError> {
+        let rev = crate::crypto::new_secret("");
         self.conn().execute(
-            "INSERT INTO parfumo_links (user_id, mode, secret, cookies, status, linked_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
-             ON CONFLICT(user_id) DO UPDATE SET mode = ?2, secret = ?3, cookies = ?4, status = ?5, linked_at = ?6, last_login_at = NULL",
-            params![user_id, mode, secret, cookies, status, now()],
+            "INSERT INTO parfumo_links (user_id, mode, secret, cookies, status, linked_at, rev) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
+             ON CONFLICT(user_id) DO UPDATE SET mode = ?2, secret = ?3, cookies = ?4, status = ?5, linked_at = ?6, rev = ?7, \
+             last_login_at = NULL, from_env = 0",
+            params![user_id, mode, secret, cookies, status, now(), rev],
         )?;
+        Ok(rev)
+    }
+
+    /// Stdio server: marks the stored link as the account of the process environment.
+    pub fn link_mark_from_env(&self, user_id: i64) -> Result<(), DbError> {
+        self.conn().execute("UPDATE parfumo_links SET from_env = 1 WHERE user_id = ?1", [user_id])?;
         Ok(())
     }
 
@@ -785,6 +817,32 @@ mod tests {
 #[cfg(test)]
 mod hardening_tests {
     use super::*;
+
+    #[test]
+    fn a_database_of_version_0_1_keeps_its_link_and_gains_the_new_columns() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, token_hash TEXT NOT NULL UNIQUE, created_at INTEGER NOT NULL);
+             CREATE TABLE parfumo_links (user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE, mode TEXT NOT NULL, secret BLOB, \
+             cookies BLOB, status TEXT NOT NULL, linked_at INTEGER NOT NULL, last_login_at INTEGER);
+             INSERT INTO users VALUES (1, 'local', 'h', 1);
+             INSERT INTO parfumo_links VALUES (1, 'cookie', NULL, x'00', 'linked', 5, NULL);",
+        )
+        .unwrap();
+        let db = Db::init(conn).unwrap();
+        let old = db.link_get(1).unwrap().unwrap();
+        assert_eq!((old.mode.as_str(), old.linked_at, old.rev.as_str(), old.from_env), ("cookie", 5, "", false));
+        db.link_mark_from_env(1).unwrap();
+        assert!(db.link_get(1).unwrap().unwrap().from_env);
+        // Linking again gives a new `rev` each time, and forgets where the old account came from.
+        let first = db.link_put(1, "credentials", Some(b"s"), None, "linked").unwrap();
+        let second = db.link_put(1, "credentials", Some(b"s"), None, "linked").unwrap();
+        let link = db.link_get(1).unwrap().unwrap();
+        assert!(first != second && link.rev == second && !link.from_env);
+        // Opening the same database again must not fail on the existing columns.
+        let again = Db::init(std::mem::replace(&mut *db.conn(), Connection::open_in_memory().unwrap())).unwrap();
+        assert_eq!(again.link_get(1).unwrap().unwrap().rev, second);
+    }
 
     #[test]
     fn a_database_from_before_jalon_5_gains_the_writes_column() {
