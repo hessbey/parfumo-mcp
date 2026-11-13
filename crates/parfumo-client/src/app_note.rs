@@ -11,6 +11,8 @@
 //! number or by a name a single note bears, a top-level category by its address. The rest
 //! is left to the web site, and an address the interface does not give stays empty.
 
+use std::{collections::HashMap, sync::MutexGuard};
+
 use serde_json::Value;
 
 use crate::{
@@ -24,18 +26,40 @@ use crate::{
 const CALL: &str = "/fragrance_notes";
 /// Rows asked per page: what the application asks, and what the web page shows.
 const PER_PAGE: u32 = 20;
+/// Names remembered at most: they are whatever the caller typed.
+const MAX_NAMES: usize = 1_000;
 
 fn pair(k: &str, v: impl ToString) -> (String, String) {
     (k.to_string(), v.to_string())
 }
 
+/// What the calls of this module already told, for the life of the client: a listing is
+/// read page after page under the same reference, which is looked up once.
+#[derive(Default)]
+pub(crate) struct NoteMemory {
+    /// The number of the note a lower-case name designates; `None` when the search
+    /// designates none.
+    names: HashMap<String, Option<u64>>,
+    /// Number and slug of the top-level categories, once the overview was read.
+    categories: Option<Vec<(u64, String)>>,
+}
+
 impl ParfumoClient {
+    fn note_memory(&self) -> MutexGuard<'_, NoteMemory> {
+        self.t.notes.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     /// The number of the note a name designates (`feature=search`): the one note of the
     /// answer that bears it, whatever the letter case. `None` when none does, or several:
-    /// the site has notes of the same name, and nothing here tells them apart.
+    /// the site has notes of the same name, and nothing here tells them apart. One call
+    /// the first time a name is met, none after.
     async fn app_note_id(&self, name: &str) -> Result<Option<u64>, ClientError> {
-        let found = self.app_get(CALL, &[pair("feature", "search"), pair("q", name)]).await?;
         let wanted = name.to_lowercase();
+        let remembered = self.note_memory().names.get(&wanted).copied();
+        if let Some(nr) = remembered {
+            return Ok(nr);
+        }
+        let found = self.app_get(CALL, &[pair("feature", "search"), pair("q", name)]).await?;
         let bearing: Vec<&Value> = found
             .get("notes")
             .and_then(Value::as_array)
@@ -43,25 +67,43 @@ impl ParfumoClient {
             .flatten()
             .filter(|note| text(note, "name").is_some_and(|n| n.to_lowercase() == wanted))
             .collect();
-        Ok(match bearing.as_slice() {
+        let nr = match bearing.as_slice() {
             [only] => count(only, "id"),
             _ => None,
-        })
+        };
+        let mut memory = self.note_memory();
+        if memory.names.len() >= MAX_NAMES {
+            memory.names.clear();
+        }
+        memory.names.insert(wanted, nr);
+        Ok(nr)
     }
 
     /// Number and slug of the top-level categories (`feature=overview`): the only
-    /// categories the interface gives the address of before their page is read.
+    /// categories the interface gives the address of before their page is read. One call
+    /// the first time, none after.
     async fn app_note_categories(&self) -> Result<Vec<(u64, String)>, ClientError> {
+        let remembered = self.note_memory().categories.clone();
+        if let Some(known) = remembered {
+            return Ok(known);
+        }
         let overview = self.app_get(CALL, &[pair("feature", "overview")]).await?;
         let categories = overview.get("categories").and_then(Value::as_array);
-        Ok(categories.into_iter().flatten().filter_map(|c| Some((count(c, "id")?, text(c, "name_url")?))).collect())
+        let known: Vec<(u64, String)> = categories.into_iter().flatten().filter_map(|c| Some((count(c, "id")?, text(c, "name_url")?))).collect();
+        // An answer without categories is not remembered: it is not what the overview is.
+        if !known.is_empty() {
+            self.note_memory().categories = Some(known.clone());
+        }
+        Ok(known)
     }
 
-    /// A note or a category as the interface names it: by number. Only a category whose
-    /// slug is known has an address.
-    fn app_note_entity(&self, category_slug: Option<String>, nr: u64, name: String) -> EntityRef {
-        let url = category_slug.as_ref().map(|slug| self.t.absolute(&routes::note(slug, true))).unwrap_or_default();
-        EntityRef { id: category_slug.unwrap_or_default(), numeric_id: Some(nr), name, url }
+    /// A category of notes; it has an address only when its slug is known. Its number is
+    /// not handed on: `numeric_id` is the number of a note, which `get_note` takes as a
+    /// reference, and categories are numbered apart (the note 311 and the category 37 are
+    /// both "Bergamot").
+    fn app_note_category(&self, slug: Option<String>, name: String) -> EntityRef {
+        let url = slug.as_ref().map(|slug| self.t.absolute(&routes::note(slug, true))).unwrap_or_default();
+        EntityRef { id: slug.unwrap_or_default(), numeric_id: None, name, url }
     }
 
     /// A row of perfumes of a note or of a category. Not a document of the search index:
@@ -91,6 +133,14 @@ impl ParfumoClient {
     /// when the interface designates it with certainty. `None` otherwise: the caller then
     /// reads the web site, which knows every address.
     pub(crate) async fn app_note(&self, r: &str, page: u32) -> Result<Option<NotePage>, ClientError> {
+        match self.app_note_page(r, page).await {
+            // A number, or a call, the interface does not know: the web site says what it is.
+            Err(ClientError::NotFound(_)) => Ok(None),
+            other => other,
+        }
+    }
+
+    async fn app_note_page(&self, r: &str, page: u32) -> Result<Option<NotePage>, ClientError> {
         let (absolute, path) = self.ref_path(r)?;
         // What is asked: a category by its address, or a note by its number or its name.
         let (asked_slug, nr, known) = if absolute {
@@ -119,39 +169,44 @@ impl ParfumoClient {
         let (feature, key) = if asked_slug.is_some() { ("category", "cat_id") } else { ("note", "note_id") };
         let page = page.max(1);
         let params = [pair("feature", feature), pair(key, nr), pair("page", page), pair("per_page", PER_PAGE)];
-        let answer = match self.app_get(CALL, &params).await {
-            Ok(answer) => answer,
-            Err(ClientError::NotFound(_)) => return Ok(None),
-            Err(e) => return Err(e),
-        };
-        // A number the interface does not know has no head: the web site says what it is.
-        let Some(head) = answer.get(feature).filter(|head| head.is_object()) else { return Ok(None) };
+        let answer = self.app_get(CALL, &params).await?;
+        // No head, or the head of another number than asked: a number the interface does
+        // not know. What it answers for one was not recorded, and a wrong note must not pass.
+        let Some(head) = answer.get(feature).filter(|head| count(head, "id") == Some(nr)) else { return Ok(None) };
+        // The answer says which page it is: the rows of another page are not those asked.
+        if number(&answer, "page").is_some_and(|answered| answered != f64::from(page)) {
+            return Ok(None);
+        }
         let outdated = |what: &str| ClientError::ParserOutdated(format!("/app/v1/fragrance_notes: {what}"));
-        let (slug, related) = match asked_slug {
+        let name = text(head, "name").ok_or_else(|| outdated("no name"))?;
+        let (note, related) = match asked_slug {
             // The page of a category repeats its slug: it must be the one that was asked.
             Some(asked) => match text(head, "name_url").filter(|slug| slug.eq_ignore_ascii_case(asked)) {
-                Some(slug) => (Some(slug), answer.get("related_categories")),
+                Some(slug) => (self.app_note_category(Some(slug), name), answer.get("related_categories")),
                 None => return Ok(None),
             },
-            None => (None, head.get("categories")),
+            // The interface gives no address of a note: none is made up.
+            None => (EntityRef { id: String::new(), numeric_id: Some(nr), name, url: String::new() }, head.get("categories")),
         };
         let slug_of = |c: &Value| known.iter().find(|(nr, _)| Some(*nr) == count(c, "id")).map(|(_, slug)| slug.clone());
         let categories = related
             .and_then(Value::as_array)
             .into_iter()
             .flatten()
-            .filter_map(|c| Some(self.app_note_entity(slug_of(c), count(c, "id")?, text(c, "name")?)))
+            .filter_map(|c| Some(self.app_note_category(slug_of(c), text(c, "name")?)))
             .collect();
         let rows = answer.get("perfumes").and_then(Value::as_array).ok_or_else(|| outdated("no perfumes"))?;
         let total = |key: &str| number(&answer, key).filter(|n| *n >= 0.0).map(|n| n as u32);
         Ok(Some(NotePage {
-            note: self.app_note_entity(slug, nr, text(head, "name").ok_or_else(|| outdated("no name"))?),
+            note,
             is_category: asked_slug.is_some(),
             categories,
             perfumes: Listing {
                 items: rows.iter().filter_map(|row| self.app_note_row(row)).collect(),
                 page,
-                total_pages: total("total_pages"),
+                // An empty page is the last one, whatever the count says: the web site stops
+                // at 1,000 rows, and whether the interface goes further was not recorded.
+                total_pages: total("total_pages").map(|pages| if rows.is_empty() { pages.min(page) } else { pages }),
                 total_items: total("total_results"),
             },
         }))
