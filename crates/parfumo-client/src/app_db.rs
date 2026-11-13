@@ -144,7 +144,7 @@ impl ParfumoClient {
             numeric_id: numeric,
             name,
         };
-        let perfumers = p
+        let perfumers: Vec<EntityRef> = p
             .get("perfumers_array")
             .and_then(Value::as_array)
             .map(|all| {
@@ -153,6 +153,12 @@ impl ParfumoClient {
                     .collect()
             })
             .unwrap_or_default();
+        // The page of a perfumer is only reached by number: the ones met here are remembered.
+        for pf in &perfumers {
+            if let Some(pf_id) = pf.numeric_id {
+                self.remember_perfumer(pf_id, &pf.id, &pf.name);
+            }
+        }
         let ratings = SCALES
             .iter()
             .filter_map(|(scale, suffix)| {

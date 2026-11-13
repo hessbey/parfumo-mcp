@@ -4,6 +4,7 @@
 mod account;
 mod app;
 mod app_db;
+mod app_perfumer;
 mod client;
 mod error;
 mod forum;

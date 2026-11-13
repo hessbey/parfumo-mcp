@@ -579,6 +579,13 @@ impl ParfumoClient {
     /// Perfumer record and one page (20 items) of their creations. `r` is a URL, a path
     /// (`/Perfumers/…`), a slug or a perfumer name.
     pub async fn get_perfumer(&self, r: &str, page: u32) -> Result<PerfumerPage, ClientError> {
+        // Through the application interface when a session of it is held and the number of
+        // the perfumer is known; the web page otherwise.
+        if self.has_app_session()
+            && let Some(perfumer) = self.app_get_perfumer(r, page).await?
+        {
+            return Ok(perfumer);
+        }
         let html = self.entity_page(r, routes::PERFUMERS_PREFIX, routes::LIVESEARCH_PERFUMER, page, "perfumer").await?;
         parse::parse_perfumer_page(&html, page)
     }

@@ -262,6 +262,9 @@ pub(crate) struct Transport {
     /// Number and `Brand/Perfume` id of the perfumes met in listings, by lower-case id:
     /// the application interface only knows perfumes by number.
     pub(crate) perfume_ids: Mutex<std::collections::HashMap<String, (u64, String)>>,
+    /// Number of the perfumers met in perfume records, by lower-case slug and by lower-case
+    /// name: the application interface only knows perfumers by number, and has no call that finds one.
+    pub(crate) perfumer_ids: Mutex<std::collections::HashMap<String, u64>>,
 }
 
 /// TLS settings of every outgoing connection of the project: the `ring` provider and the
@@ -307,6 +310,7 @@ impl Transport {
             csrf: Mutex::new(None),
             nick: Mutex::new(None),
             perfume_ids: Mutex::new(std::collections::HashMap::new()),
+            perfumer_ids: Mutex::new(std::collections::HashMap::new()),
         })
     }
 
