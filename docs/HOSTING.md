@@ -34,14 +34,14 @@ docker compose run --rm --no-deps server keygen
 
 # 3. Start
 docker compose up -d
-curl https://<your-domain>/healthz        # {"canary":null,"status":"ok","version":"0.2.1"}
+curl https://<your-domain>/healthz        # {"canary":null,"status":"ok","version":"0.2.2"}
 ```
 
 Nothing is compiled on the server: Compose downloads the published image,
 `ghcr.io/hessbey/parfumo-mcp-server`, built for amd64 and arm64.
 
 - **Version.** Without a setting, the latest release runs. To pin one, add
-  `PARFUMO_MCP_VERSION=0.2.1` to `.env`: an upgrade then only happens when you change it.
+  `PARFUMO_MCP_VERSION=0.2.2` to `.env`: an upgrade then only happens when you change it.
 - **Upgrade.** `docker compose pull`, then `docker compose up -d`.
 - **Your own build.** `docker build -t ghcr.io/hessbey/parfumo-mcp-server:local .`, then
   `PARFUMO_MCP_VERSION=local` in `.env`.

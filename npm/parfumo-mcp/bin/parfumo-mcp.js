@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Starts the parfumo-mcp program that npm installed for this system, with the same
 // arguments, input and output. The program itself is in a package of its own, one per
-// system (parfumo-mcp-linux-x64, parfumo-mcp-win32-x64, ...), which npm picks by itself.
+// system (@hessbey/parfumo-mcp-linux-x64, @hessbey/parfumo-mcp-win32-x64, ...), which npm
+// picks by itself.
 "use strict";
 
 const { spawn } = require("node:child_process");
@@ -17,7 +18,7 @@ function fail(reason) {
 
 let program;
 try {
-  program = require.resolve(`parfumo-mcp-${system}/bin/parfumo-mcp${process.platform === "win32" ? ".exe" : ""}`);
+  program = require.resolve(`@hessbey/parfumo-mcp-${system}/bin/parfumo-mcp${process.platform === "win32" ? ".exe" : ""}`);
 } catch {
   fail(
     `no program for this system (${system}) was installed. Supported: Linux with glibc (x64, arm64), ` +

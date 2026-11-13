@@ -2,7 +2,7 @@
 
 [← Documentation](README.md)
 
-Version 0.2.1. All five milestones of the [specification](SPECIFICATION.md) are
+Version 0.2.2. All five milestones of the [specification](SPECIFICATION.md) are
 delivered, plus the local stdio binary. This page says what has been proven against the real
 site and what has not. Nothing here is assumed: a route that was never exercised is listed
 as such. The dated, detailed record is [MILESTONES.md](MILESTONES.md) (in French).
@@ -27,7 +27,7 @@ as such. The dated, detailed record is [MILESTONES.md](MILESTONES.md) (in French
 | Some public writes | Settings, signature scent, time zone, follow and unfollow: sent live, read back, restored |
 | Safeguards | Public-write lock, daily caps (persisting across restarts) and recipient allow-list: by test and live |
 | Canary | 48 read-only checks `ok` on the live site (27 public, 21 on the test account), no write. Run again on the current code on 12 November 2026 by the maintainer, in the Docker image started with `docker-compose.local.yml`, the test account linked in credentials mode through the `/link` page in a browser: 48 ok, 0 changed, 0 failed, 0 skipped |
-| npm packages | Built around the release program, packed, installed in an empty project and run through npm's launcher, in CI on Linux, macOS and Windows: the command starts the program, an MCP client talks through it, exit codes and errors pass, a missing program is reported. Publishing all six packages was rehearsed with `npm publish --dry-run` |
+| npm packages | Built around the release program, packed, installed in an empty project and run through npm's launcher, in CI on Linux, macOS and Windows: the command starts the program, an MCP client talks through it, exit codes and errors pass, a missing program is reported |
 | Local login page | The real local binary against a fake Parfumo, by test: an account linked on the page with no setting at all, used at once by the running server and kept across a restart; other addresses, other host names and forms from other sites refused; `login` and `logout` from another process. Driven with a real Chromium on 13 November 2026: language switch, wrong password refused, account linked, page closed |
 | Web pages in a browser | The `/link` page and the whole OAuth flow (login page, authorization code, token, then `/mcp`) driven with a real Chromium against the release server, on 12 November 2026: access key alone, language switch, wrong key refused. An earlier pass caught a bug the tests had missed: both forms were refused by every browser |
 | Isolation and secrets | Two users never see each other's data or actions; no secret in logs, errors, tool results or the canary report — by test |
@@ -61,10 +61,13 @@ Other points:
 - **Real MCP clients.** Only MCP Inspector on the command line has been used. The OAuth
   flow has run in a real browser with a scripted client, not with a real MCP client, and no
   desktop client has launched the stdio binary.
-- **npm.** The packages have never been published: `npx -y parfumo-mcp` against the real
-  registry, npm's choice of the package of each system, and both ways of authenticating the
-  release job (token, trusted publishing) are unproven until the first release that
-  includes them.
+- **npm.** `npx -y parfumo-mcp` against the real registry, and npm's choice of the package
+  of each system, are unproven until the first release that publishes them all. Version
+  0.2.1 got four packages out under plain names, with the token and with provenance; npm's
+  spam filter then refused the Windows one, and the main package never went out. The
+  packages of the systems now live under `@hessbey/`; whether npm accepts the plain name
+  `parfumo-mcp` is not known yet. Publishing without a token (trusted publishing) has
+  never run.
 - **Local login page.** It has never linked a real Parfumo account, only the fake site; no
   real MCP client has handed its address to a user; and opening the browser from
   `parfumo-mcp login` was never tried (the tests print the address instead).

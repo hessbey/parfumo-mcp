@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { TARGETS, build, packageName } from "./build.mjs";
+import { SCOPE, TARGETS, build, packageName } from "./build.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const binary = resolve(process.argv[2] ?? "");
@@ -29,18 +29,18 @@ const check = (ok, what, detail = "") => {
 const npm = (args, cwd) => execFileSync("npm", args, { cwd, encoding: "utf8", shell: process.platform === "win32", stdio: ["ignore", "pipe", "inherit"] });
 
 try {
-  const [platformDir, mainDir] = build({ version, out: join(work, "packages"), binaries: { [target]: binary } });
+  const [platformDir, mainDir, scopedDir] = build({ version, out: join(work, "packages"), binaries: { [target]: binary } });
   const manifest = JSON.parse(readFileSync(join(mainDir, "package.json"), "utf8"));
-  check(manifest.version === version, `the packages carry the version of Cargo.toml (${version})`);
+  check(manifest.version === version && manifest.name === "parfumo-mcp", `parfumo-mcp carries the version of Cargo.toml (${version})`);
   check(
     Object.keys(manifest.optionalDependencies).length === Object.keys(TARGETS).length &&
-      Object.values(manifest.optionalDependencies).every((v) => v === version),
+      Object.entries(manifest.optionalDependencies).every(([name, v]) => name.startsWith(`${SCOPE}/`) && v === version),
     "the main package names the program of every system, at the same version"
   );
 
   // Paths given to npm are relative: the temporary directory may hold a space.
   const pack = (dir) => npm(["pack", "--loglevel=error", "--pack-destination", "../.."], dir).trim().split("\n").pop();
-  const [platformTgz, mainTgz] = [pack(platformDir), pack(mainDir)];
+  const [platformTgz, mainTgz, scopedTgz] = [pack(platformDir), pack(mainDir), pack(scopedDir)];
   const files = JSON.parse(npm(["pack", "--loglevel=error", "--dry-run", "--json"], platformDir))[0].files.map((f) => f.path);
   check(files.some((f) => f.startsWith("bin/parfumo-mcp")) && files.includes("LICENSE"), `${packageName(target)} holds the program and the licence`);
 
@@ -92,6 +92,11 @@ try {
     "a missing program is reported with the place to download one",
     lost.stderr
   );
+
+  // The copy under the account starts the same program.
+  const copy = install("under-the-account", [scopedTgz, platformTgz]);
+  const same = spawnSync(process.execPath, [join(copy, "node_modules", SCOPE, "parfumo-mcp", "bin", "parfumo-mcp.js"), "--version"], { encoding: "utf8" });
+  check(same.status === 0 && same.stdout.trim() === `parfumo-mcp ${version}`, `the copy ${SCOPE}/parfumo-mcp starts the same program`, same.stdout + same.stderr);
   console.log(`\nnpm packages of parfumo-mcp ${version} for ${target}: all checks passed`);
 } finally {
   // Windows keeps a program's file locked for a moment after it ends.

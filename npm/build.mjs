@@ -1,6 +1,12 @@
 // Builds the npm packages of the local program: one package per system, holding the
 // program, and the `parfumo-mcp` package that starts the one npm installed.
 //
+// The packages of the systems, which nobody types, live under the npm account of the
+// project (`@hessbey/…`): npm refused the plain name `parfumo-mcp-win32-x64` as spam, and
+// names under an account are not checked that way. The main package keeps the plain name
+// `parfumo-mcp`; a copy of it is built as `@hessbey/parfumo-mcp`, to fall back on should
+// npm refuse the plain name too.
+//
 //   node npm/build.mjs --version 0.2.1 --out npm-dist --binary <target>=<file> [...] [--all]
 //
 // `<target>` is the Rust target the file was built for. `--all` refuses to go on unless a
@@ -19,12 +25,20 @@ export const TARGETS = {
   "x86_64-pc-windows-msvc": { os: "win32", cpu: "x64", label: "Windows x64" },
 };
 
-export const packageName = (target) => `parfumo-mcp-${TARGETS[target].os}-${TARGETS[target].cpu}`;
+/** The npm account the packages of the systems are published under. */
+export const SCOPE = "@hessbey";
+
+/** Directory of a system's package in the output, and its name on npm. */
+const directory = (target) => `parfumo-mcp-${TARGETS[target].os}-${TARGETS[target].cpu}`;
+export const packageName = (target) => `${SCOPE}/${directory(target)}`;
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = dirname(here);
 
-/** Writes the packages into `out` and returns their directories, the main one last. */
+/**
+ * Writes the packages into `out` and returns their directories: those of the systems, then
+ * the main one (`parfumo-mcp`), then its copy under the account (`scoped`).
+ */
 export function build({ version, out, binaries, all = false }) {
   if (!/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(version)) throw new Error(`not a version: ${version}`);
   for (const target of Object.keys(binaries)) {
@@ -39,7 +53,7 @@ export function build({ version, out, binaries, all = false }) {
   const dirs = [];
   for (const [target, file] of Object.entries(binaries)) {
     const { os, cpu, libc, label } = TARGETS[target];
-    const dir = join(out, packageName(target));
+    const dir = join(out, directory(target));
     mkdirSync(join(dir, "bin"), { recursive: true });
     const program = join(dir, "bin", os === "win32" ? "parfumo-mcp.exe" : "parfumo-mcp");
     copyFileSync(file, program);
@@ -74,6 +88,12 @@ export function build({ version, out, binaries, all = false }) {
   main.optionalDependencies = Object.fromEntries(Object.keys(TARGETS).map((target) => [packageName(target), version]));
   writeFileSync(join(dir, "package.json"), JSON.stringify(main, null, 2) + "\n");
   dirs.push(dir);
+
+  // The same package under the account.
+  const scoped = join(out, "scoped");
+  cpSync(dir, scoped, { recursive: true });
+  writeFileSync(join(scoped, "package.json"), JSON.stringify({ ...main, name: `${SCOPE}/parfumo-mcp` }, null, 2) + "\n");
+  dirs.push(scoped);
   return dirs;
 }
 
