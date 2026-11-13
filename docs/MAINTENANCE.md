@@ -236,18 +236,22 @@ npm, il est publié sous l'étiquette `next`.
 
 **npm.** La publication sur npm vient en dernier, après la page de version : si elle échoue,
 le reste est déjà en ligne. Corriger la cause, puis « Re-run failed jobs » sur l'exécution :
-les paquets déjà publiés sont sautés. Elle s'authentifie de deux façons :
+les paquets déjà publiés sont sautés. Elle s'authentifie de deux façons, dans cet ordre :
 
-- **Avec un jeton**, tant que le secret `NPM_TOKEN` existe dans le dépôt (Settings → Secrets
-  and variables → Actions). C'est la seule façon de publier les paquets la première fois. Le
-  jeton se crée sur npmjs.com (Access Tokens → Generate New Token) : droits « Read and
-  write » sur tous les paquets, option « Bypass two-factor authentication » cochée. npm
-  limite sa durée à 90 jours.
-- **Sans jeton** (publication de confiance), une fois les paquets créés : sur npmjs.com,
-  dans les réglages de **chacun des paquets**, section « Trusted Publisher », choisir
-  GitHub Actions et indiquer l'utilisateur `hessbey`, le dépôt `parfumo-mcp` et le fichier
-  `release.yml`, sans environnement. Supprimer ensuite le secret `NPM_TOKEN` : il n'y a plus
-  rien à renouveler.
+- **Sans jeton** (publication de confiance) : npm vérifie que la demande vient bien du
+  fichier `release.yml` de ce dépôt. Aucun secret, rien à renouveler. Il faut pour cela que
+  **chacun des sept paquets** désigne ce dépôt comme éditeur de confiance : sur npmjs.com,
+  page du paquet → Settings → « Trusted Publisher » → GitHub Actions, avec l'utilisateur
+  `hessbey`, le dépôt `parfumo-mcp`, le fichier `release.yml`, et aucun environnement.
+- **Avec un jeton**, en secours, si la première façon échoue et que le secret `NPM_TOKEN`
+  existe dans le dépôt (Settings → Secrets and variables → Actions). L'exécution affiche
+  alors un avertissement. C'est aussi la seule façon de publier un paquet qui n'existe pas
+  encore sur npm. Le jeton se crée sur npmjs.com (Access Tokens → Generate New Token) :
+  droits « Read and write » sur tous les paquets, option « Bypass two-factor
+  authentication » cochée. npm limite sa durée à 90 jours.
+
+Les sept paquets : `parfumo-mcp`, `@hessbey/parfumo-mcp`, et `@hessbey/parfumo-mcp-linux-x64`,
+`-linux-arm64`, `-darwin-arm64`, `-darwin-x64`, `-win32-x64`.
 
 **Noms des paquets.** Le paquet principal garde le nom nu `parfumo-mcp`. Les paquets des
 systèmes, que personne ne tape, sont publiés sous le compte npm du projet (`@hessbey/…`) : à
