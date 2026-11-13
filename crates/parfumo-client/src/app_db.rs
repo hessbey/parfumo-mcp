@@ -78,6 +78,16 @@ fn note_names(p: &Value, key: &str) -> Vec<String> {
     p.get(key).and_then(Value::as_array).map(|notes| notes.iter().filter_map(|n| text(n, "name")).collect()).unwrap_or_default()
 }
 
+/// The words of a slug, as the search of the application takes them.
+fn words(slug: &str) -> String {
+    slug.replace(['_', '-'], " ")
+}
+
+/// Among the brands a search found, the number of the one with that slug, without regard to case.
+pub(crate) fn brand_by_slug(brands: &[Value], slug: &str) -> Option<u64> {
+    brands.iter().find(|b| text(b, "b_name_url").is_some_and(|u| u.eq_ignore_ascii_case(slug))).and_then(|b| count(b, "b_id"))
+}
+
 /// The four charts of the community classification, in the order the interface sends them.
 const CLASS_GROUPS: [&str; 4] = ["Type", "Season", "Occasion", "Audience & Style"];
 /// The five rating scales: name, then the suffix of their fields.
@@ -86,6 +96,13 @@ const SCALES: [(&str, &str); 5] = [("scent", ""), ("durability", "_dur"), ("sill
 impl ParfumoClient {
     fn remember_perfume(&self, id: &str, p_id: u64) {
         self.t.perfume_ids.lock().unwrap_or_else(|e| e.into_inner()).insert(id.to_lowercase(), (p_id, id.to_string()));
+    }
+
+    /// The brands the search of the application finds for a slug or a name (`GET /search`):
+    /// `{b_id, b_name, b_name_url}` each.
+    pub(crate) async fn app_brands_like(&self, reference: &str) -> Result<Vec<Value>, ClientError> {
+        let found = self.app_get("/search", &[pair("filter", words(reference))]).await?;
+        Ok(found.get("brands").and_then(Value::as_array).cloned().unwrap_or_default())
     }
 
     /// The number of a perfume from a reference: a number, a Parfumo URL or a
@@ -102,14 +119,7 @@ impl ParfumoClient {
             return Ok(p_id);
         }
         let (brand_url, name_url) = id.split_once('/').ok_or_else(|| ClientError::InvalidInput("not a perfume reference".into()))?;
-        let words = |slug: &str| slug.replace(['_', '-'], " ");
-        let found = self.app_get("/search", &[pair("filter", words(brand_url))]).await?;
-        let brand = found
-            .get("brands")
-            .and_then(Value::as_array)
-            .and_then(|brands| brands.iter().find(|b| text(b, "b_name_url").is_some_and(|u| u.eq_ignore_ascii_case(brand_url))))
-            .and_then(|b| count(b, "b_id"))
-            .ok_or_else(|| ClientError::NotFound(id.clone()))?;
+        let brand = brand_by_slug(&self.app_brands_like(brand_url).await?, brand_url).ok_or_else(|| ClientError::NotFound(id.clone()))?;
         let params = [
             pair("page", 1),
             pair("per_page", PER_PAGE),

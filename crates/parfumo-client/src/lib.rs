@@ -3,6 +3,7 @@
 
 mod account;
 mod app;
+mod app_brand;
 mod app_db;
 mod client;
 mod error;
