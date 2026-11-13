@@ -636,6 +636,13 @@ impl ParfumoClient {
         {
             return Err(ClientError::InvalidInput("year out of range".into()));
         }
+        // Through the application interface when a session of it is held and it serves
+        // this ranking; the web pages otherwise.
+        if self.has_app_session()
+            && let Some(listing) = self.app_rankings(kind, page).await?
+        {
+            return Ok(listing);
+        }
         let path = routes::ranking(kind);
         if let Some(section) = routes::trends_section(kind) {
             let (_, html) = self.t.get(&path, Some(LISTING_TTL), false, false).await?;
