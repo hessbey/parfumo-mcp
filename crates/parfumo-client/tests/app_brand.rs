@@ -2,7 +2,10 @@
 //! real site (`tests/fixtures/app_*.json`). A local fake serves them and records what is asked.
 
 use std::{
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 
@@ -31,6 +34,8 @@ struct Site {
     asked: Mutex<Vec<String>>,
     /// What `/brand_details` answers.
     details: String,
+    /// Whether the session token is refused from now on.
+    refuse: AtomicBool,
 }
 
 impl Site {
@@ -55,21 +60,29 @@ async fn handler(State(site): State<Arc<Site>>, uri: Uri, headers: HeaderMap, _b
     if uri.path() == "/app/v1/auth/login" {
         return json(r#"{"status":"success","auth_token":"tok"}"#);
     }
-    if headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()) != Some("Bearer tok") {
+    if site.refuse.load(Ordering::SeqCst) || headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()) != Some("Bearer tok") {
         return (StatusCode::UNAUTHORIZED, r#"{"status":"error","message":"Authorization header required"}"#).into_response();
     }
     match uri.path() {
         "/app/v1/search" if asked.ends_with("filter=1234") => json(SEARCH_DIGITS),
         "/app/v1/search" => json(SEARCH_CREED),
         "/app/v1/brand_details" if asked.contains("b_id=999999&") => json(NO_BRAND),
-        "/app/v1/brand_details" => json(&site.details),
+        // Assumed as well: the other way the interface may tell that no brand has a number.
+        "/app/v1/brand_details" if asked.contains("b_id=404404&") => (StatusCode::NOT_FOUND, r#"{"error":"Not found"}"#).into_response(),
+        // Assumed too: an answer about another brand than the one asked for.
+        "/app/v1/brand_details" if asked.contains("b_id=777&") => json(&site.details),
+        // The recorded brand, under the number asked for.
+        "/app/v1/brand_details" => {
+            let b_id = asked.split(['?', '&']).find_map(|p| p.strip_prefix("b_id=")).unwrap_or_default();
+            json(&site.details.replace(r#""id": "253""#, &format!(r#""id": "{b_id}""#)))
+        }
         _ => (StatusCode::NOT_FOUND, r#"{"error":"Not found"}"#).into_response(),
     }
 }
 
 /// A client of a fake site whose `/brand_details` answers `details`.
 async fn client_of(details: &str) -> (ParfumoClient, Arc<Site>) {
-    let site = Arc::new(Site { asked: Mutex::new(Vec::new()), details: details.to_string() });
+    let site = Arc::new(Site { asked: Mutex::new(Vec::new()), details: details.to_string(), refuse: AtomicBool::new(false) });
     let app = Router::new().fallback(handler).with_state(site.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
@@ -160,6 +173,36 @@ async fn a_number_is_the_number_of_the_brand_unless_a_brand_is_named_by_these_di
     // An answer without a brand is not an empty page.
     assert_eq!(c.get_brand("999999", 1).await.unwrap_err(), ClientError::NotFound("brand 999999".into()));
     assert!(site.take().iter().all(|a| a.starts_with("/app/v1/")), "and the web site is not asked for it");
+    // Nor is the page of another brand an answer.
+    assert_eq!(c.get_brand("777", 1).await.unwrap_err(), ClientError::NotFound("brand 777".into()));
+    site.take();
+    assert!(matches!(c.get_brand("404404", 1).await.unwrap_err(), ClientError::NotFound(_)));
+    assert_eq!(site.take(), ["/app/v1/search?filter=404404", "/app/v1/brand_details?b_id=404404&page=1&per_page=20&g_f=1&g_m=1&g_u=1"]);
+}
+
+#[tokio::test]
+async fn the_brand_of_a_reference_is_looked_up_once() {
+    let (c, site) = logged_in().await;
+    // A listing is read page after page: only the first one costs a search.
+    let first = c.get_brand("creed", 1).await.unwrap();
+    c.get_brand("creed", 2).await.unwrap();
+    let page = |n: u32| format!("/app/v1/brand_details?b_id=253&page={n}&per_page=20&g_f=1&g_m=1&g_u=1");
+    assert_eq!(site.take(), ["/app/v1/search?filter=creed".to_string(), page(1), page(2)]);
+
+    // The id and the address handed back are those of the site: they name the brand without a search.
+    assert_eq!(first.brand.id, "Creed");
+    c.get_brand(&first.brand.id, 3).await.unwrap();
+    c.get_brand(&first.brand.url, 4).await.unwrap();
+    assert_eq!(site.take(), [page(3), page(4)]);
+
+    // What the search does not know is not asked of it twice either: the web site is read at once.
+    for _ in 0..2 {
+        assert!(c.get_brand("No Such Brand", 2).await.is_err());
+    }
+    let asked = site.take();
+    let searches: Vec<&String> = asked.iter().filter(|a| a.starts_with("/app/v1/")).collect();
+    assert_eq!(searches, ["/app/v1/search?filter=No+Such+Brand"], "{asked:?}");
+    assert_eq!(asked.iter().filter(|a| *a == "/Perfumes/No_Such_Brand?current_page=2").count(), 2, "{asked:?}");
 }
 
 #[tokio::test]
@@ -170,6 +213,8 @@ async fn a_brand_the_search_does_not_know_is_left_to_the_web_site() {
         ("No Such Brand", "/app/v1/search?filter=No+Such+Brand", "/Perfumes/No_Such_Brand"),
         // An address names a brand by its slug alone: a name that happens to fit is not enough.
         ("/Perfumes/Goose_Creek", "/app/v1/search?filter=Goose+Creek", "/Perfumes/Goose_Creek"),
+        // Nor is a number: in an address, digits are a slug (`/Perfumes/4711`), never the brand number.
+        ("/Perfumes/253", "/app/v1/search?filter=253", "/Perfumes/253"),
     ] {
         assert!(c.get_brand(reference, 1).await.is_err());
         let asked = site.take();
@@ -178,10 +223,41 @@ async fn a_brand_the_search_does_not_know_is_left_to_the_web_site() {
     }
 
     // What is not a reference to a brand is refused as before, and nothing is asked.
-    for reference in ["/Users/someone", " ", "../x"] {
+    for reference in ["/Users/someone", "/Perfumes/", " ", "../x", "https://example.org/Perfumes/Creed"] {
         assert!(matches!(c.get_brand(reference, 1).await.unwrap_err(), ClientError::InvalidInput(_)), "{reference}");
     }
     assert_eq!(site.asked(), Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn an_answer_of_another_shape_is_reported_and_a_missing_count_is_not_zero() {
+    // Not recorded: the recorded answer without its listing, then without the count of its listing.
+    let no_listing = BRAND_DETAILS.replace(r#""p": {"#, r#""q": {"#);
+    let no_count = BRAND_DETAILS.replace(r#""matches": 104"#, r#""found": 104"#);
+    assert!(no_listing != BRAND_DETAILS && no_count != BRAND_DETAILS);
+
+    let (c, _site) = client_of(&no_listing).await;
+    c.app_login("someone@example.org", "pw").await.unwrap();
+    assert_eq!(c.get_brand("Creed", 1).await.unwrap_err(), ClientError::ParserOutdated("/app/v1/brand_details: no perfumes".into()));
+
+    let (c, _site) = client_of(&no_count).await;
+    c.app_login("someone@example.org", "pw").await.unwrap();
+    let b = c.get_brand("Creed", 1).await.unwrap();
+    assert_eq!((b.perfumes.items.len(), b.perfumes.total_items, b.perfumes.total_pages), (5, None, None));
+}
+
+#[tokio::test]
+async fn a_refused_token_stops_the_calls_and_the_web_site_serves_the_next_ones() {
+    let (c, site) = logged_in().await;
+    site.refuse.store(true, Ordering::SeqCst);
+    assert_eq!(c.get_brand("Creed", 1).await.unwrap_err(), ClientError::LoginRequired);
+    assert_eq!(site.take(), ["/app/v1/search?filter=Creed"], "one refusal, and nothing after it");
+    assert!(!c.has_app_session(), "the refused token is forgotten");
+
+    assert!(c.get_brand("Creed", 1).await.is_err());
+    let asked = site.take();
+    assert_eq!(asked[0], "/Perfumes/Creed");
+    assert!(asked.iter().all(|a| !a.starts_with("/app/v1/")), "{asked:?}");
 }
 
 #[tokio::test]
