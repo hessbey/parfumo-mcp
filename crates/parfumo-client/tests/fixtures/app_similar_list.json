@@ -1,0 +1,67 @@
+{
+ "status": "success",
+ "perfumes": [
+  {
+   "con_ext_name": "Club de Nuit Intense Man",
+   "con_ext_concentration": "Eau de Toilette",
+   "id": "55402",
+   "p_name": "Club de Nuit Intense Man (Eau de Toilette)",
+   "b_name": "Armaf",
+   "release_year": "2015",
+   "gender": "maennlich",
+   "url_image": "https://media.parfumo.com/perfumes/f7/f7f71f-club-de-nuit-intense-man-eau-de-toilette-armaf_1200.jpg?width=240&aspect_ratio=1:1",
+   "wilson_score": "0.813",
+   "percentage": 81,
+   "cnt_yes": 688,
+   "cnt_no": 131,
+   "cnt": 819
+  },
+  {
+   "con_ext_name": "L'Aventure",
+   "con_ext_concentration": "",
+   "id": "65533",
+   "p_name": "L'Aventure",
+   "b_name": "Al Haramain",
+   "release_year": "0",
+   "gender": "maennlich",
+   "url_image": "https://media.parfumo.com/perfumes/5d/5dd9de-l-aventure-al-haramain_1200.jpg?width=240&aspect_ratio=1:1",
+   "wilson_score": "0.775",
+   "percentage": 78,
+   "cnt_yes": 374,
+   "cnt_no": 86,
+   "cnt": 460
+  },
+  {
+   "con_ext_name": "Aventus Cologne",
+   "con_ext_concentration": "",
+   "id": "127275",
+   "p_name": "Aventus Cologne",
+   "b_name": "Creed",
+   "release_year": "2019",
+   "gender": "unisex",
+   "url_image": "https://media.parfumo.com/perfumes/57/579fc2_aventus-cologne-creed_1200.jpg?width=240&aspect_ratio=1:1",
+   "wilson_score": "0.738",
+   "percentage": 74,
+   "cnt_yes": 73,
+   "cnt_no": 15,
+   "cnt": 88
+  },
+  {
+   "con_ext_name": "Absolu Aventus",
+   "con_ext_concentration": "",
+   "id": "225233",
+   "p_name": "Absolu Aventus",
+   "b_name": "Creed",
+   "release_year": "2023",
+   "gender": "unisex",
+   "url_image": "https://media.parfumo.com/perfumes/9c/9cd3f6_absolu-aventus-creed_1200.jpg?width=240&aspect_ratio=1:1",
+   "wilson_score": "0.653",
+   "percentage": 65,
+   "cnt_yes": 45,
+   "cnt_no": 13,
+   "cnt": 58
+  }
+ ],
+ "total": 318,
+ "limit": 10
+}

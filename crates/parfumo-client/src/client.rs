@@ -478,6 +478,13 @@ impl ParfumoClient {
     /// links; `resolve_urls` entries are resolved through `similar_sneak_peek.php`
     /// (one request each, cached 24 h).
     pub async fn get_similar_perfumes_with(&self, r: &str, opts: SimilarOptions) -> Result<SimilarPerfumes, ClientError> {
+        // The two lists through the application interface when a session of it is held and
+        // it finds the perfume; all of it from the web site otherwise.
+        if self.has_app_session()
+            && let Some(found) = self.app_similar_perfumes(r, opts).await?
+        {
+            return Ok(found);
+        }
         let (ctx, mut similar) = self.similar_list(r, "similar").await?;
         let mut warnings = Vec::new();
 
