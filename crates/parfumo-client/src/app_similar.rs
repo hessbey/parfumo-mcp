@@ -109,11 +109,12 @@ impl ParfumoClient {
 
         let mut layering = Vec::new();
         if opts.include_layering {
-            let numbers = |list: &[SimilarPerfume]| list.iter().map(|p| p.p_id).collect::<Vec<_>>();
+            // What the interface says of a row: its links are ours, and differ between the lists.
+            let said = |list: &[SimilarPerfume]| list.iter().map(|p| (p.p_id, p.percent, p.votes)).collect::<Vec<_>>();
             match self.app_similar_list("layer", p_id).await {
-                // The same list twice would mean that the type was ignored: similar
-                // perfumes are not shown as layering suggestions.
-                Ok(list) if !list.is_empty() && numbers(&list) == numbers(&similar) => {
+                // The same rows with the same votes would mean that the type was ignored:
+                // similar perfumes are not shown as layering suggestions.
+                Ok(list) if !list.is_empty() && said(&list) == said(&similar) => {
                     warnings.push("layering suggestions unavailable: the application interface answered the list of similar perfumes".into());
                 }
                 Ok(list) => layering = list,
