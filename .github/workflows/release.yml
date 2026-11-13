@@ -181,7 +181,7 @@ jobs:
     permissions:
       contents: read
       # Lets npm prove that the packages were built here (provenance), and publish without
-      # a token once the packages trust this workflow (trusted publishing).
+      # a token, since the packages trust this workflow (trusted publishing).
       id-token: write
     env:
       HAS_TOKEN: ${{ secrets.NPM_TOKEN != '' }}
@@ -208,15 +208,25 @@ jobs:
             args="$args --binary ${dir#npm-bin/npm-}=$(ls "$dir"/parfumo-mcp*)"
           done
           node npm/build.mjs --version "${GITHUB_REF_NAME#v}" --out npm-dist --all $args
-      - name: Publish with the token of the repository
-        if: env.HAS_TOKEN == 'true'
+      # npm proves to the registry that it runs in this workflow: no secret is involved.
+      # Each package must list this repository and `release.yml` as its trusted publisher
+      # on npmjs.com.
+      - name: Publish without a token (trusted publishing)
+        id: trusted
+        continue-on-error: true
+        run: npm/publish.sh npm-dist
+      # Only when the step above failed and the repository still holds a token. Packages
+      # already published are skipped.
+      - name: Publish with the token of the repository (fallback)
+        if: steps.trusted.outcome == 'failure' && env.HAS_TOKEN == 'true'
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
+          echo "::warning::Trusted publishing failed: the packages were published with the NPM_TOKEN secret instead. Check the trusted publisher of each package on npmjs.com."
           echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > "$RUNNER_TEMP/npmrc"
           NPM_CONFIG_USERCONFIG="$RUNNER_TEMP/npmrc" npm/publish.sh npm-dist
-      # Without a token, npm proves to the registry that it runs in this workflow. Each
-      # package must list this repository and `release.yml` as its trusted publisher.
-      - name: Publish without a token (trusted publishing)
-        if: env.HAS_TOKEN != 'true'
-        run: npm/publish.sh npm-dist
+      - name: Nothing could publish
+        if: steps.trusted.outcome == 'failure' && env.HAS_TOKEN != 'true'
+        run: |
+          echo "::error::Trusted publishing failed and the repository holds no NPM_TOKEN secret. Check the trusted publisher of each package on npmjs.com, then re-run this job."
+          exit 1
