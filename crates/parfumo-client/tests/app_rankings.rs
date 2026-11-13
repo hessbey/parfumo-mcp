@@ -4,7 +4,10 @@
 //! keep reading the web pages.
 
 use std::{
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 
@@ -14,7 +17,7 @@ use axum::{
     http::{HeaderMap, StatusCode, Uri, header},
     response::{IntoResponse, Response},
 };
-use parfumo_client::{ClientConfig, ClientError, GlobalLimiter, ParfumoClient, RankingKind};
+use parfumo_client::{ClientConfig, ClientError, GlobalLimiter, Listing, ParfumoClient, PerfumeSummary, RankingKind};
 
 /// `GET /perfumes?y_0=2020&page=1&per_page=20`, trimmed to five rows. Recorded without a
 /// sort order: the rows are in alphabetical order.
@@ -26,6 +29,8 @@ const TRENDS: &str = include_str!("fixtures/trends.html");
 struct Site {
     /// Path and query of every request, in order.
     asked: Mutex<Vec<String>>,
+    /// Whether the site now refuses the token it gave.
+    refuses: AtomicBool,
 }
 
 impl Site {
@@ -44,13 +49,20 @@ async fn handler(State(site): State<Arc<Site>>, uri: Uri, headers: HeaderMap, _b
         return json(r#"{"status":"success","auth_token":"tok"}"#);
     }
     if path.starts_with("/app/v1/") {
-        if headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()) != Some("Bearer tok") {
+        if site.refuses.load(Ordering::SeqCst) || headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()) != Some("Bearer tok") {
             return (StatusCode::UNAUTHORIZED, r#"{"status":"error","message":"Authorization header required"}"#).into_response();
         }
         return match path {
             // A year without any perfume, and a year with fewer perfumes than one page.
             "/app/v1/perfumes" if asked.contains("y_0=1801&") => json(r#"{"matches":0,"rows":[]}"#),
             "/app/v1/perfumes" if asked.contains("y_0=1950&") => json(&YEAR.replace("\"matches\": 5565", "\"matches\": 5")),
+            // The recorded answer with its total as text and a row without the address of
+            // its brand; without its total; and an answer that is not a listing.
+            "/app/v1/perfumes" if asked.contains("y_0=1802&") => {
+                json(&YEAR.replace("\"matches\": 5565", "\"matches\": \"5565\"").replace("\"b_name_url\": \"Rabanne\"", "\"b_name_url\": \"\""))
+            }
+            "/app/v1/perfumes" if asked.contains("y_0=1803&") => json(&YEAR.replace("\"matches\": 5565,", "")),
+            "/app/v1/perfumes" if asked.contains("y_0=1804&") => json(r#"{"error":"Not available"}"#),
             "/app/v1/perfumes" if asked.contains("y_0=") => json(YEAR),
             _ => (StatusCode::NOT_FOUND, r#"{"error":"Not found"}"#).into_response(),
         };
@@ -86,6 +98,11 @@ async fn client(logged_in: bool) -> (ParfumoClient, Arc<Site>) {
     (client, site)
 }
 
+/// The names of a page, in the order of the listing.
+fn names(page: &Listing<PerfumeSummary>) -> Vec<&str> {
+    page.items.iter().map(|p| p.name.as_str()).collect()
+}
+
 #[tokio::test]
 async fn a_release_year_is_read_as_the_application_asks_it() {
     let (c, site) = client(true).await;
@@ -94,7 +111,8 @@ async fn a_release_year_is_read_as_the_application_asks_it() {
 
     // 5565 perfumes that year; like the web site, the first 1000 are listed.
     assert_eq!((page.page, page.total_items, page.total_pages), (3, Some(5565), Some(50)));
-    assert_eq!(page.items.len(), 5);
+    // The rows keep the order the site sent them in.
+    assert_eq!(names(&page), ["#04 Figue Prune", "#05 Vanille Neroli", "'Cause I'm Happy", "007 pour Femme", "1 Million Parfum"]);
 
     let million = page.items.iter().find(|p| p.name == "1 Million Parfum").unwrap();
     assert_eq!((million.id.as_str(), million.p_id), ("Rabanne/1-million-parfum", Some(136850)));
@@ -174,13 +192,50 @@ async fn the_other_rankings_still_read_the_web_pages() {
 
 #[tokio::test]
 async fn a_year_goes_to_the_web_site_past_the_thousandth_perfume_or_without_a_session() {
-    // The application never asks past the 1000th row: page 51 is left to the web site.
+    // The application never asks past the 1000th row: page 50 is the last one asked of the
+    // interface, page 51 is left to the web site.
     let (c, site) = client(true).await;
+    let last = c.get_rankings(&RankingKind::Year(2020), 50).await.unwrap();
+    assert_eq!((last.items.len(), last.page, last.total_pages), (5, 50, Some(50)));
     let _ = c.get_rankings(&RankingKind::Year(2020), 51).await;
-    assert_eq!(site.asked(), ["/Release_Years/2020?current_page=51"]);
+    assert_eq!(site.asked(), ["/app/v1/perfumes?y_0=2020&page=50&per_page=20&o=nr_desc&g_f=1&g_m=1&g_u=1", "/Release_Years/2020?current_page=51"]);
 
     // Without a session of the application interface, nothing changes.
     let (c, site) = client(false).await;
     let _ = c.get_rankings(&RankingKind::Year(2020), 1).await;
     assert_eq!(site.asked(), ["/Release_Years/2020"]);
+}
+
+#[tokio::test]
+async fn an_answer_that_departs_from_the_recorded_one_is_never_filled_in() {
+    let (c, site) = client(true).await;
+
+    // A total sent as text is read. A row without the address of its brand is left out:
+    // its `Brand/Perfume` id cannot be built, and none is made up.
+    let page = c.get_rankings(&RankingKind::Year(1802), 1).await.unwrap();
+    assert_eq!((page.total_items, page.total_pages), (Some(5565), Some(50)));
+    assert_eq!(names(&page), ["#04 Figue Prune", "#05 Vanille Neroli", "'Cause I'm Happy", "007 pour Femme"]);
+
+    // Without a total the rows are kept and the totals stay unknown, on any page.
+    let page = c.get_rankings(&RankingKind::Year(1803), 2).await.unwrap();
+    assert_eq!((page.items.len(), page.page, page.total_items, page.total_pages), (5, 2, None, None));
+
+    // An answer that is not a listing is an error: neither an empty year, nor a silent
+    // switch to the web site.
+    let err = c.get_rankings(&RankingKind::Year(1804), 1).await.unwrap_err();
+    assert!(matches!(err, ClientError::ParserOutdated(_)), "{err:?}");
+    assert_eq!(site.asked().len(), 3);
+    assert!(site.asked().iter().all(|a| a.starts_with("/app/v1/perfumes?y_0=")), "{:?}", site.asked());
+}
+
+#[tokio::test]
+async fn once_the_token_is_refused_the_web_site_is_read_again() {
+    let (c, site) = client(true).await;
+    site.refuses.store(true, Ordering::SeqCst);
+
+    // The refusal is reported and the token forgotten: it is not sent a second time.
+    assert_eq!(c.get_rankings(&RankingKind::Year(2020), 1).await.unwrap_err(), ClientError::LoginRequired);
+    assert!(!c.has_app_session());
+    let _ = c.get_rankings(&RankingKind::Year(2020), 1).await;
+    assert_eq!(site.asked(), ["/app/v1/perfumes?y_0=2020&page=1&per_page=20&o=nr_desc&g_f=1&g_m=1&g_u=1", "/Release_Years/2020"]);
 }
