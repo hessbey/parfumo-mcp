@@ -259,9 +259,9 @@ pub(crate) struct Transport {
     csrf: Mutex<Option<String>>,
     /// Nickname of the logged-in member, memoised with the session (see `forget_csrf`).
     pub(crate) nick: Mutex<Option<String>>,
-    /// Numbers of the perfumes met in listings, by lower-case `brand/perfume` id: the
-    /// application interface only knows perfumes by number.
-    pub(crate) perfume_ids: Mutex<std::collections::HashMap<String, u64>>,
+    /// Number and `Brand/Perfume` id of the perfumes met in listings, by lower-case id:
+    /// the application interface only knows perfumes by number.
+    pub(crate) perfume_ids: Mutex<std::collections::HashMap<String, (u64, String)>>,
 }
 
 /// TLS settings of every outgoing connection of the project: the `ring` provider and the

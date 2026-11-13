@@ -371,6 +371,11 @@ impl ParfumoClient {
 
     /// Long reviews of a perfume, full text, `limit` ≤ 50 per call.
     pub async fn get_perfume_reviews(&self, r: &str, sort: ReviewSort, offset: u32, limit: u32) -> Result<Slice<Review>, ClientError> {
+        if self.has_app_session()
+            && let Some(slice) = self.app_perfume_reviews(r, sort, offset, limit).await?
+        {
+            return Ok(slice);
+        }
         let n = limit.clamp(1, routes::MAX_SLICE);
         let (_, ctx) = self.perfume_ctx(r, false).await?;
         let total = ctx.reviews_total;
@@ -406,6 +411,11 @@ impl ParfumoClient {
 
     /// Statements (short reviews) of a perfume, `limit` ≤ 50 per call.
     pub async fn get_perfume_statements(&self, r: &str, sort: ReviewSort, offset: u32, limit: u32) -> Result<Slice<Statement>, ClientError> {
+        if self.has_app_session()
+            && let Some(slice) = self.app_perfume_statements(r, sort, offset, limit).await?
+        {
+            return Ok(slice);
+        }
         let n = limit.clamp(1, routes::MAX_SLICE);
         let (_, ctx) = self.perfume_ctx(r, false).await?;
         let total = ctx.statements_total;

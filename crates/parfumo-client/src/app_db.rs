@@ -5,7 +5,10 @@ use serde_json::Value;
 
 use crate::{
     ClientError, ParfumoClient,
-    models::{ClassGroup, ClassShare, EntityRef, Gender, Listing, NotePyramid, PerfumeDetails, PerfumeSummary, RatingScore, SearchQuery},
+    models::{
+        ClassGroup, ClassShare, EntityRef, Gender, Listing, MemberRatings, NotePyramid, PerfumeDetails, PerfumeSummary, RatingScore, Review,
+        ReviewSort, SearchQuery, Slice, Statement,
+    },
     site::routes,
 };
 
@@ -50,6 +53,26 @@ pub(crate) fn out_of_ten(percent: f64) -> f32 {
     ((percent / 10.0) * 10.0).round() as f32 / 10.0
 }
 
+/// A text written by a member, as plain text: line breaks kept, markup and entities removed.
+pub(crate) fn plain(html: &str) -> String {
+    // Line breaks are the `<br />` of the site; the raw ones that follow them are not kept.
+    let broken = html.replace(['\r', '\n'], "").replace("<br />", "\n").replace("<br/>", "\n").replace("<br>", "\n");
+    let text: String = scraper::Html::parse_fragment(&broken).root_element().text().collect();
+    let mut lines: Vec<&str> = text.lines().map(str::trim).collect();
+    lines.dedup_by(|a, b| a.is_empty() && b.is_empty());
+    lines.join("\n").trim().to_string()
+}
+
+/// The sort orders of reviews and statements the interface knows; `None` for the others.
+fn text_order(sort: ReviewSort) -> Option<Option<&'static str>> {
+    match sort {
+        ReviewSort::Relevance => Some(None),
+        ReviewSort::Newest => Some(Some("date_desc")),
+        ReviewSort::Oldest => Some(Some("date_asc")),
+        _ => None,
+    }
+}
+
 /// The names of a list of notes (`[{id, name, …}]`), without the empty placeholders.
 fn note_names(p: &Value, key: &str) -> Vec<String> {
     p.get(key).and_then(Value::as_array).map(|notes| notes.iter().filter_map(|n| text(n, "name")).collect()).unwrap_or_default()
@@ -62,7 +85,7 @@ const SCALES: [(&str, &str); 5] = [("scent", ""), ("durability", "_dur"), ("sill
 
 impl ParfumoClient {
     fn remember_perfume(&self, id: &str, p_id: u64) {
-        self.t.perfume_ids.lock().unwrap_or_else(|e| e.into_inner()).insert(id.to_lowercase(), p_id);
+        self.t.perfume_ids.lock().unwrap_or_else(|e| e.into_inner()).insert(id.to_lowercase(), (p_id, id.to_string()));
     }
 
     /// The number of a perfume from a reference: a number, a Parfumo URL or a
@@ -74,7 +97,7 @@ impl ParfumoClient {
             return reference.parse().map_err(|_| ClientError::InvalidInput("not a perfume number".into()));
         }
         let id = self.perfume_ref_id(reference)?;
-        let known = |c: &Self| c.t.perfume_ids.lock().unwrap_or_else(|e| e.into_inner()).get(&id.to_lowercase()).copied();
+        let known = |c: &Self| c.t.perfume_ids.lock().unwrap_or_else(|e| e.into_inner()).get(&id.to_lowercase()).map(|(p_id, _)| *p_id);
         if let Some(p_id) = known(self) {
             return Ok(p_id);
         }
@@ -194,6 +217,104 @@ impl ParfumoClient {
             id,
             warnings: Vec::new(),
         })
+    }
+
+    /// The `Brand/Perfume` id of a perfume known by number: remembered, else read from its record.
+    async fn app_perfume_slug(&self, p_id: u64) -> Result<String, ClientError> {
+        let known = self.t.perfume_ids.lock().unwrap_or_else(|e| e.into_inner()).values().find(|(id, _)| *id == p_id).map(|(_, slug)| slug.clone());
+        match known {
+            Some(slug) => Ok(slug),
+            None => Ok(self.app_get_perfume(&p_id.to_string()).await?.id),
+        }
+    }
+
+    /// One window of the reviews (`kind` = `review`) or statements (`statement`) of a
+    /// perfume: the rows, and the address of the perfume. `None` for a sort order the
+    /// interface does not know.
+    async fn app_perfume_texts(
+        &self,
+        kind: &str,
+        r: &str,
+        sort: ReviewSort,
+        offset: u32,
+        limit: u32,
+    ) -> Result<Option<(Vec<Value>, String)>, ClientError> {
+        let Some(order) = text_order(sort) else { return Ok(None) };
+        let p_id = self.app_perfume_id(r).await?;
+        let per_page = limit.clamp(1, routes::MAX_SLICE);
+        let mut params = vec![pair("page", offset / per_page + 1), pair("per_page", per_page)];
+        if let Some(order) = order {
+            params.push(pair("o", order));
+        }
+        let key = format!("{kind}s");
+        let answer = self.app_get(&format!("/{key}/{p_id}"), &params).await?;
+        // A list, or an object keyed by position.
+        let rows: Vec<Value> = match answer.get(&key) {
+            Some(Value::Array(rows)) => rows.clone(),
+            Some(Value::Object(rows)) => rows.values().cloned().collect(),
+            _ => return Err(ClientError::ParserOutdated(format!("/app/v1/{key}: no {key}"))),
+        };
+        let rows = rows.into_iter().skip((offset % per_page) as usize).collect();
+        let url = self.t.absolute(&format!("{}{}", routes::PERFUMES_PREFIX, self.app_perfume_slug(p_id).await?));
+        Ok(Some((rows, url)))
+    }
+
+    fn member_ratings(row: &Value) -> MemberRatings {
+        MemberRatings { scent: number(row, "voting").filter(|v| *v > 0.0).map(|v| v as f32), ..MemberRatings::default() }
+    }
+
+    /// Long reviews of a perfume (`GET /reviews/{number}`).
+    pub(crate) async fn app_perfume_reviews(&self, r: &str, sort: ReviewSort, offset: u32, limit: u32) -> Result<Option<Slice<Review>>, ClientError> {
+        let Some((rows, perfume_url)) = self.app_perfume_texts("review", r, sort, offset, limit).await? else { return Ok(None) };
+        let items = rows
+            .iter()
+            .filter_map(|row| {
+                let (id, author) = (count(row, "review_id")?, text(row, "nick_name")?);
+                Some(Review {
+                    id,
+                    url: format!("{perfume_url}/reviews/{id}"),
+                    author_url: Some(self.t.absolute(&routes::user(&author))),
+                    author,
+                    date: text(row, "date"),
+                    title: text(row, "review_title").map(|t| plain(&t)),
+                    text: plain(&text(row, "review_text")?),
+                    truncated: false,
+                    ratings: Self::member_ratings(row),
+                    awards: number(row, "awards").map(|n| n as u32),
+                    comments: number(row, "replies").map(|n| n as u32),
+                })
+            })
+            .collect();
+        Ok(Some(Slice { items, offset, total: None }))
+    }
+
+    /// Statements of a perfume (`GET /statements/{number}`).
+    pub(crate) async fn app_perfume_statements(
+        &self,
+        r: &str,
+        sort: ReviewSort,
+        offset: u32,
+        limit: u32,
+    ) -> Result<Option<Slice<Statement>>, ClientError> {
+        let Some((rows, perfume_url)) = self.app_perfume_texts("statement", r, sort, offset, limit).await? else { return Ok(None) };
+        let items = rows
+            .iter()
+            .filter_map(|row| {
+                let (id, author) = (count(row, "statement_id")?, text(row, "nick_name")?);
+                Some(Statement {
+                    id,
+                    url: format!("{perfume_url}/statements/{id}"),
+                    author_url: Some(self.t.absolute(&routes::user(&author))),
+                    author,
+                    date: text(row, "date"),
+                    text: plain(&text(row, "statement_text")?),
+                    ratings: Self::member_ratings(row),
+                    awards: number(row, "awards").map(|n| n as u32),
+                    comments: number(row, "replies").map(|n| n as u32),
+                })
+            })
+            .collect();
+        Ok(Some(Slice { items, offset, total: None }))
     }
 
     /// A row of the filtered listing (`GET /perfumes`, and the listings of a brand, a

@@ -12,12 +12,14 @@ use axum::{
     http::{HeaderMap, StatusCode, Uri, header},
     response::{IntoResponse, Response},
 };
-use parfumo_client::{ClientConfig, ClientError, Gender, GlobalLimiter, ParfumoClient, SearchQuery, SearchSort};
+use parfumo_client::{ClientConfig, ClientError, Gender, GlobalLimiter, ParfumoClient, ReviewSort, SearchQuery, SearchSort};
 
 const PERFUMES_BRAND: &str = include_str!("fixtures/app_perfumes_brand.json");
 const PERFUMES_TEXT: &str = include_str!("fixtures/app_perfumes_text.json");
 const SEARCH_CREED: &str = include_str!("fixtures/app_search_creed.json");
 const PERFUME_DETAILS: &str = include_str!("fixtures/app_perfume_details.json");
+const REVIEWS: &str = include_str!("fixtures/app_reviews.json");
+const STATEMENTS: &str = include_str!("fixtures/app_statements.json");
 
 #[derive(Default)]
 struct Site {
@@ -40,6 +42,8 @@ async fn handler(State(site): State<Arc<Site>>, uri: Uri, headers: HeaderMap, _b
         "/app/v1/perfumes" if asked.contains("b_id=") => json(PERFUMES_BRAND),
         "/app/v1/perfumes" => json(PERFUMES_TEXT),
         path if path.starts_with("/app/v1/perfume_details/") => json(PERFUME_DETAILS),
+        path if path.starts_with("/app/v1/reviews/") => json(REVIEWS),
+        path if path.starts_with("/app/v1/statements/") => json(STATEMENTS),
         _ => (StatusCode::NOT_FOUND, r#"{"error":"Not found"}"#).into_response(),
     }
 }
@@ -186,4 +190,37 @@ async fn a_perfume_named_by_its_id_is_found_through_its_brand_then_remembered() 
     assert_eq!(c.get_perfume("Creed/no-such-perfume").await.unwrap_err(), ClientError::NotFound("Creed/no-such-perfume".into()));
     assert_eq!(site.asked.lock().unwrap().len(), before + 2);
     assert!(matches!(c.get_perfume("not a reference").await.unwrap_err(), ClientError::InvalidInput(_)));
+}
+
+#[tokio::test]
+async fn reviews_and_statements_come_as_plain_text_with_their_author_and_rating() {
+    let (c, site) = logged_in().await;
+    let reviews = c.get_perfume_reviews("9438", ReviewSort::Newest, 20, 10).await.unwrap();
+    // The third window of ten; the address of the perfume is read once from its record.
+    assert_eq!(site.asked.lock().unwrap().as_slice(), ["/app/v1/reviews/9438?page=3&per_page=10&o=date_desc", "/app/v1/perfume_details/9438"]);
+    assert_eq!((reviews.offset, reviews.items.len(), reviews.total), (20, 3, None));
+    let first = &reviews.items[0];
+    assert_eq!((first.id, first.author.as_str(), first.title.as_deref()), (723108, "member1", Some("Title 1")));
+    assert_eq!(first.url, format!("{}/Perfumes/Creed/aventus/reviews/723108", c.base_url()));
+    assert!(first.author_url.as_deref().unwrap().ends_with("/Users/member1"));
+    assert_eq!(
+        first.text, "First paragraph of review 1.\n\nSecond paragraph, with \"quotes\" & an entity.",
+        "markup and entities are gone, paragraphs stay"
+    );
+    assert_eq!(
+        (first.ratings.scent, first.ratings.durability, first.awards, first.comments, first.truncated),
+        (Some(8.5), None, Some(1), Some(0), false)
+    );
+
+    let statements = c.get_perfume_statements("9438", ReviewSort::Relevance, 0, 50).await.unwrap();
+    assert_eq!(site.asked.lock().unwrap().last().unwrap(), "/app/v1/statements/9438?page=1&per_page=50", "the address of the perfume is remembered");
+    assert_eq!(statements.items.len(), 6);
+    assert_eq!(statements.items[0].text, "Statement 1, one line.\nAnother line.");
+    assert!(statements.items[0].url.ends_with("/Perfumes/Creed/aventus/statements/2800121"), "{}", statements.items[0].url);
+    assert_eq!(statements.items[4].ratings.scent, None, "a statement without a rating has none");
+
+    // A sort order the interface does not know is left to the web site: here, nothing is asked of it.
+    let before = site.asked.lock().unwrap().len();
+    let _ = c.get_perfume_reviews("9438", ReviewSort::MostReplies, 0, 10).await;
+    assert!(site.asked.lock().unwrap()[before..].iter().all(|a| !a.starts_with("/app/v1/reviews")), "{:?}", site.asked.lock().unwrap());
 }
