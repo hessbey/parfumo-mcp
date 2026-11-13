@@ -226,8 +226,8 @@ Une version se publie en poussant un tag. Le reste est automatique
    - crée la page de version sur GitHub, avec les archives et le fichier `SHA256SUMS` ;
    - publie l'image Docker du serveur pour amd64 et arm64 sur
      `ghcr.io/hessbey/parfumo-mcp-server`, sous le numéro de version et sous `latest` ;
-   - publie le binaire local sur npm : le paquet `@hessbey/parfumo-mcp`, que lance
-     `npx -y @hessbey/parfumo-mcp`, et un paquet par système qui contient le binaire
+   - publie le binaire local sur npm : le paquet `parfumo-mcp`, que lance
+     `npx -y parfumo-mcp`, et un paquet par système qui contient le binaire
      (`@hessbey/parfumo-mcp-linux-x64`, `-linux-arm64`, `-darwin-arm64`, `-darwin-x64`,
      `-win32-x64`).
 
@@ -249,14 +249,17 @@ les paquets déjà publiés sont sautés. Elle s'authentifie de deux façons :
   `release.yml`, sans environnement. Supprimer ensuite le secret `NPM_TOKEN` : il n'y a plus
   rien à renouveler.
 
-**Noms des paquets.** Tout est publié sous le compte npm du projet (`@hessbey/…`). À la
-version 0.2.1, les paquets portaient des noms sans compte : npm a accepté les quatre paquets
-Linux et macOS, puis refusé `parfumo-mcp-win32-x64` (« Package name triggered spam
-detection »), si bien que le paquet principal n'est jamais sorti. Ces quatre paquets
-orphelins de la 0.2.1 ne servent à rien et peuvent être marqués obsolètes
-(`npm deprecate`). Le nom nu `parfumo-mcp` est tout de même tenté à chaque version, comme
-copie du paquet principal, pour que personne d'autre ne le prenne : son refus par npm
-n'arrête pas la publication.
+**Noms des paquets.** Le paquet principal garde le nom nu `parfumo-mcp`. Les paquets des
+systèmes, que personne ne tape, sont publiés sous le compte npm du projet (`@hessbey/…`) : à
+la version 0.2.1 ils portaient des noms nus, et npm a accepté les quatre paquets Linux et
+macOS puis refusé `parfumo-mcp-win32-x64` (« Package name triggered spam detection »), si
+bien que le paquet principal n'est jamais sorti. Ces quatre paquets orphelins de la 0.2.1 ne
+servent à rien et peuvent être marqués obsolètes (`npm deprecate`).
+
+Une copie du paquet principal est publiée sous le nom `@hessbey/parfumo-mcp`, juste avant
+lui. Si npm refusait aussi le nom nu, l'étape échouerait, mais `npx -y @hessbey/parfumo-mcp`
+fonctionnerait : il resterait à écrire au support de npm pour débloquer le nom, ou à changer
+la commande dans la documentation.
 
 Les paquets se construisent avec `npm/build.mjs` et se vérifient sans rien publier avec
 `node npm/test.mjs target/release/parfumo-mcp`, ce que fait l'intégration continue sur les

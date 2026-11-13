@@ -29,9 +29,9 @@ const check = (ok, what, detail = "") => {
 const npm = (args, cwd) => execFileSync("npm", args, { cwd, encoding: "utf8", shell: process.platform === "win32", stdio: ["ignore", "pipe", "inherit"] });
 
 try {
-  const [platformDir, mainDir, plainDir] = build({ version, out: join(work, "packages"), binaries: { [target]: binary } });
+  const [platformDir, mainDir, scopedDir] = build({ version, out: join(work, "packages"), binaries: { [target]: binary } });
   const manifest = JSON.parse(readFileSync(join(mainDir, "package.json"), "utf8"));
-  check(manifest.version === version && manifest.name === `${SCOPE}/parfumo-mcp`, `${SCOPE}/parfumo-mcp carries the version of Cargo.toml (${version})`);
+  check(manifest.version === version && manifest.name === "parfumo-mcp", `parfumo-mcp carries the version of Cargo.toml (${version})`);
   check(
     Object.keys(manifest.optionalDependencies).length === Object.keys(TARGETS).length &&
       Object.entries(manifest.optionalDependencies).every(([name, v]) => name.startsWith(`${SCOPE}/`) && v === version),
@@ -40,7 +40,7 @@ try {
 
   // Paths given to npm are relative: the temporary directory may hold a space.
   const pack = (dir) => npm(["pack", "--loglevel=error", "--pack-destination", "../.."], dir).trim().split("\n").pop();
-  const [platformTgz, mainTgz, plainTgz] = [pack(platformDir), pack(mainDir), pack(plainDir)];
+  const [platformTgz, mainTgz, scopedTgz] = [pack(platformDir), pack(mainDir), pack(scopedDir)];
   const files = JSON.parse(npm(["pack", "--loglevel=error", "--dry-run", "--json"], platformDir))[0].files.map((f) => f.path);
   check(files.some((f) => f.startsWith("bin/parfumo-mcp")) && files.includes("LICENSE"), `${packageName(target)} holds the program and the licence`);
 
@@ -54,7 +54,7 @@ try {
     return dir;
   };
   const project = install("with-program", [mainTgz, platformTgz]);
-  const launcher = join(project, "node_modules", SCOPE, "parfumo-mcp", "bin", "parfumo-mcp.js");
+  const launcher = join(project, "node_modules", "parfumo-mcp", "bin", "parfumo-mcp.js");
   check(existsSync(join(project, "node_modules", ".bin", process.platform === "win32" ? "parfumo-mcp.cmd" : "parfumo-mcp")), "npm creates the parfumo-mcp command");
 
   const env = { ...process.env, PARFUMO_MCP_DB: join(work, "data", "p.db"), PARFUMO_BASE_URL: "http://127.0.0.1:9" };
@@ -86,17 +86,17 @@ try {
 
   // Without the program of this system, the command says so instead of failing obscurely.
   const bare = install("without-program", [mainTgz]);
-  const lost = spawnSync(process.execPath, [join(bare, "node_modules", SCOPE, "parfumo-mcp", "bin", "parfumo-mcp.js"), "--version"], { encoding: "utf8" });
+  const lost = spawnSync(process.execPath, [join(bare, "node_modules", "parfumo-mcp", "bin", "parfumo-mcp.js"), "--version"], { encoding: "utf8" });
   check(
     lost.status === 1 && lost.stdout === "" && lost.stderr.includes(`${process.platform}-${process.arch}`) && lost.stderr.includes("/releases"),
     "a missing program is reported with the place to download one",
     lost.stderr
   );
 
-  // The copy under the plain name starts the same program.
-  const plain = install("plain-name", [plainTgz, platformTgz]);
-  const same = spawnSync(process.execPath, [join(plain, "node_modules", "parfumo-mcp", "bin", "parfumo-mcp.js"), "--version"], { encoding: "utf8" });
-  check(same.status === 0 && same.stdout.trim() === `parfumo-mcp ${version}`, "the plain name parfumo-mcp starts the same program", same.stdout + same.stderr);
+  // The copy under the account starts the same program.
+  const copy = install("under-the-account", [scopedTgz, platformTgz]);
+  const same = spawnSync(process.execPath, [join(copy, "node_modules", SCOPE, "parfumo-mcp", "bin", "parfumo-mcp.js"), "--version"], { encoding: "utf8" });
+  check(same.status === 0 && same.stdout.trim() === `parfumo-mcp ${version}`, `the copy ${SCOPE}/parfumo-mcp starts the same program`, same.stdout + same.stderr);
   console.log(`\nnpm packages of parfumo-mcp ${version} for ${target}: all checks passed`);
 } finally {
   // Windows keeps a program's file locked for a moment after it ends.

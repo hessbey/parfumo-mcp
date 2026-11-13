@@ -61,12 +61,13 @@ Other points:
 - **Real MCP clients.** Only MCP Inspector on the command line has been used. The OAuth
   flow has run in a real browser with a scripted client, not with a real MCP client, and no
   desktop client has launched the stdio binary.
-- **npm.** `npx -y @hessbey/parfumo-mcp` against the real registry, and npm's choice of the
-  package of each system, are unproven until the first release that publishes them all.
-  Version 0.2.1 got four packages out under plain names, with the token and with
-  provenance; npm's spam filter then refused the Windows one, and the main package never
-  went out. The packages now live under `@hessbey/`. Publishing without a token (trusted
-  publishing) has never run.
+- **npm.** `npx -y parfumo-mcp` against the real registry, and npm's choice of the package
+  of each system, are unproven until the first release that publishes them all. Version
+  0.2.1 got four packages out under plain names, with the token and with provenance; npm's
+  spam filter then refused the Windows one, and the main package never went out. The
+  packages of the systems now live under `@hessbey/`; whether npm accepts the plain name
+  `parfumo-mcp` is not known yet. Publishing without a token (trusted publishing) has
+  never run.
 - **Local login page.** It has never linked a real Parfumo account, only the fake site; no
   real MCP client has handed its address to a user; and opening the browser from
   `parfumo-mcp login` was never tried (the tests print the address instead).

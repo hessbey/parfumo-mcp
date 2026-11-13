@@ -1,7 +1,7 @@
 # A release is made by pushing a tag `vX.Y.Z` that matches the version in Cargo.toml.
 # It builds both binaries for Linux, macOS and Windows, attaches the archives and their
 # checksums to a GitHub release, publishes the Docker image of the HTTP server for amd64
-# and arm64 on ghcr.io, then the local program on npm (`npx @hessbey/parfumo-mcp`).
+# and arm64 on ghcr.io, then the local program on npm (`npx parfumo-mcp`).
 name: release
 
 on:

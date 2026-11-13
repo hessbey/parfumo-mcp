@@ -9,9 +9,9 @@ network, apart from a login page on `127.0.0.1` while you link your account.
 ## Install
 
 **With npm**, if [Node.js](https://nodejs.org) 18 or newer is installed, there is nothing to
-install by hand: the client starts the program with `npx -y @hessbey/parfumo-mcp`, which fetches the
+install by hand: the client starts the program with `npx -y parfumo-mcp`, which fetches the
 one for your system the first time and keeps it. To stay on a version, name it:
-`npx -y @hessbey/parfumo-mcp@<version>`. The npm package holds the same programs as the archives
+`npx -y parfumo-mcp@<version>`. The npm package holds the same programs as the archives
 below, and npm shows that they were built by this repository (provenance).
 
 **Or download.** Take the archive for your system from the [latest release](https://github.com/hessbey/parfumo-mcp/releases/latest) and unpack
@@ -47,7 +47,7 @@ cargo build --release -p parfumo-mcp
 Claude Code:
 
 ```sh
-claude mcp add parfumo -- npx -y @hessbey/parfumo-mcp
+claude mcp add parfumo -- npx -y parfumo-mcp
 ```
 
 Clients configured with a JSON file (Claude Desktop and most others):
@@ -55,7 +55,7 @@ Clients configured with a JSON file (Claude Desktop and most others):
 ```json
 {
   "mcpServers": {
-    "parfumo": { "command": "npx", "args": ["-y", "@hessbey/parfumo-mcp"] }
+    "parfumo": { "command": "npx", "args": ["-y", "parfumo-mcp"] }
   }
 }
 ```
@@ -63,7 +63,7 @@ Clients configured with a JSON file (Claude Desktop and most others):
 With a downloaded or built program, give its path instead of `npx`:
 `claude mcp add parfumo -- /path/to/parfumo-mcp`, or `"command": "/path/to/parfumo-mcp"`
 without `args`. The commands of this page are then written `parfumo-mcp …` with that path;
-with npm, write `npx -y @hessbey/parfumo-mcp …`.
+with npm, write `npx -y parfumo-mcp …`.
 
 There is nothing else to set. The public tools (database, forum, blogs, Souk, profiles) work
 at once; the tools that act on your account answer `not_linked` until you link it.

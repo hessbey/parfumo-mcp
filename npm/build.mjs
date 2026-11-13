@@ -1,10 +1,11 @@
 // Builds the npm packages of the local program: one package per system, holding the
-// program, and the `@hessbey/parfumo-mcp` package that starts the one npm installed.
+// program, and the `parfumo-mcp` package that starts the one npm installed.
 //
-// Every package lives under the npm account of the project (`@hessbey/…`): npm refused the
-// plain name `parfumo-mcp-win32-x64` as spam, and names under an account are not checked
-// that way. The plain name `parfumo-mcp` is built as well, as a copy of the main package,
-// so that nobody else can take it; publishing it is allowed to fail.
+// The packages of the systems, which nobody types, live under the npm account of the
+// project (`@hessbey/…`): npm refused the plain name `parfumo-mcp-win32-x64` as spam, and
+// names under an account are not checked that way. The main package keeps the plain name
+// `parfumo-mcp`; a copy of it is built as `@hessbey/parfumo-mcp`, to fall back on should
+// npm refuse the plain name too.
 //
 //   node npm/build.mjs --version 0.2.1 --out npm-dist --binary <target>=<file> [...] [--all]
 //
@@ -24,7 +25,7 @@ export const TARGETS = {
   "x86_64-pc-windows-msvc": { os: "win32", cpu: "x64", label: "Windows x64" },
 };
 
-/** The npm account every package is published under. */
+/** The npm account the packages of the systems are published under. */
 export const SCOPE = "@hessbey";
 
 /** Directory of a system's package in the output, and its name on npm. */
@@ -36,7 +37,7 @@ const root = dirname(here);
 
 /**
  * Writes the packages into `out` and returns their directories: those of the systems, then
- * the main one (`parfumo-mcp`), then its copy under the plain name (`unscoped`).
+ * the main one (`parfumo-mcp`), then its copy under the account (`scoped`).
  */
 export function build({ version, out, binaries, all = false }) {
   if (!/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(version)) throw new Error(`not a version: ${version}`);
@@ -61,12 +62,12 @@ export function build({ version, out, binaries, all = false }) {
     writeFileSync(
       join(dir, "README.md"),
       `# ${packageName(target)}\n\nThe \`parfumo-mcp\` program for ${label}. It is installed by the ` +
-        `[\`${SCOPE}/parfumo-mcp\`](https://www.npmjs.com/package/${SCOPE}/parfumo-mcp) package: install that one.\n`
+        `[\`parfumo-mcp\`](https://www.npmjs.com/package/parfumo-mcp) package: install that one.\n`
     );
     const manifest = {
       name: packageName(target),
       version,
-      description: `The parfumo-mcp program for ${label}. Installed by the ${SCOPE}/parfumo-mcp package.`,
+      description: `The parfumo-mcp program for ${label}. Installed by the parfumo-mcp package.`,
       license: main.license,
       homepage: main.homepage,
       repository: main.repository,
@@ -88,11 +89,11 @@ export function build({ version, out, binaries, all = false }) {
   writeFileSync(join(dir, "package.json"), JSON.stringify(main, null, 2) + "\n");
   dirs.push(dir);
 
-  // The same package under the plain name.
-  const plain = join(out, "unscoped");
-  cpSync(dir, plain, { recursive: true });
-  writeFileSync(join(plain, "package.json"), JSON.stringify({ ...main, name: "parfumo-mcp" }, null, 2) + "\n");
-  dirs.push(plain);
+  // The same package under the account.
+  const scoped = join(out, "scoped");
+  cpSync(dir, scoped, { recursive: true });
+  writeFileSync(join(scoped, "package.json"), JSON.stringify({ ...main, name: `${SCOPE}/parfumo-mcp` }, null, 2) + "\n");
+  dirs.push(scoped);
   return dirs;
 }
 
