@@ -92,8 +92,8 @@ was recorded; its shape is in the appendix.
 | --- | --- | --- |
 | `GET /wardrobe` | — : the lists and their counts | yes |
 | `GET /wardrobe` | `p_id` : where one perfume is, personal note, whether rated | yes |
-| `GET /wardrobe` | `type` (a list), `order`, `remember` | yes (empty list) |
-| `GET /wardrobe` | `overview=1`, `per`, `if_version` | yes (empty) |
+| `GET /wardrobe` | `type` (a list), `order`, `remember` | yes |
+| `GET /wardrobe` | `overview=1`, `per`, `if_version` | yes |
 | `POST /wardrobe` | `type=add`, `p_id`, `wr` (the list) | no |
 | `POST /wardrobe` | `type=remove`, `p_id`, `wr` | no |
 | `POST /wardrobe` | `type=move`, `p_id`, `wr`, `to` | no |
@@ -103,29 +103,29 @@ was recorded; its shape is in the appendix.
 | `POST /wardrobe/custom` | `action=create`, `name` | no |
 | `POST /wardrobe/custom` | `action=update_name\|update_icon\|delete`, `collection_id`, `name` or `icon` | no |
 | `POST /wardrobe/custom` | `action=reorder`, `order` (JSON array) | no |
-| `GET /shelfcontrol` | `list` | yes (empty) |
+| `GET /shelfcontrol` | `list` | yes |
 | `GET /wardrobe_profiler` | `type`, `section`, `notes_type` (section names not found) | no |
-| `GET /notes_list` | `page`, `per_page` : personal notes | yes (empty) |
+| `GET /notes_list` | `page`, `per_page` : personal notes | yes |
 | `POST /notes` | `p_id`, `action=add\|edit\|delete`, `text` | no |
 
 ### Wear log
 
 | Call | Parameters | Seen |
 | --- | --- | --- |
-| `GET /tracker` | — : what is worn today, last worn | yes (empty) |
+| `GET /tracker` | — : what is worn today, last worn | yes |
 | `POST /tracker` | `action=set_iwear`, `perfume_id` ; `action=reset_iwear` | no |
-| `GET /tracker_overview` | `offset`, `limit` : the history | yes (empty) |
+| `GET /tracker_overview` | `offset`, `limit` : the history | yes |
 | `POST /tracker_overview` | `action=delete\|update_layering\|update_comment\|update_date`, `l_id`, and `layered_with_id`, `comment` or `wear_date` | no |
-| `GET /tracker_calendar` | `y`, `m` | yes (empty) |
+| `GET /tracker_calendar` | `y`, `m` | yes |
 | `POST /tracker_calendar` | `action=log`, `p_id`, `wear_date` | no |
-| `GET /tracker_stats` | — | yes (empty) |
+| `GET /tracker_stats` | — | yes |
 | `GET /sotd` | — | yes |
 
 ### Ratings, reviews, comments
 
 | Call | Parameters | Seen |
 | --- | --- | --- |
-| `GET /rating` | `p_id` | yes (none given) |
+| `GET /rating` | `p_id` : the member's five ratings, out of 100 | yes |
 | `POST /rating` | `p_id`, `rating_type` (one of the five), `rating_value` | no |
 | `GET /classification` | `p_id` : the groups, their options, what was voted | yes |
 | `POST /classification` | `p_id`, `c`, `ct`, `action=add\|remove` | no |
@@ -182,8 +182,9 @@ stay on the web pages.
 - Answers about a perfume mix public data with the caller's own (`wr`, `wr_lists`,
   `voted`): they cannot be put in a cache shared by several users as they are.
 - Reviews came back in several languages; the effect of `X-Language` was not measured.
-- The test account is empty: collection items, wear-log entries, messages and ratings have
-  only been seen as empty lists.
+- The collection, the wear log, the ratings and the personal notes were recorded a second
+  time once the test account held a few entries (appendix, second part). Messages have only
+  been seen as empty lists.
 
 ## Open questions
 
@@ -515,3 +516,109 @@ Types only, no value. `number-as-text` is a number sent as a string; `[x, …]` 
 {b: {id: number-as-text, manufacturer_id: number-as-text, country_id: number-as-text, name: text, names_previous: null, names_alternative_language: null, name_url: text, name_sound_override: text, name_sound_update: number-as-text, name_sound_lang: text, name_sound_file: text, website: text, instagram: text, founding_year: number-as-text, nr_of_perfums: number-as-text, tags: text, avg_voting: number-as-text, avg_voting_month: number-as-text, total_votings: number-as-text, total_votings_month: number-as-text, in_wardrobes: number-as-text}, p: {id: number-as-text, brand_id: number-as-text, manufacturer_id: number-as-text, release_year: number-as-text, status: text, name: text, name_url: text, name_sound_override: text, name_sound_update: number-as-text, name_sound_file: text, name_sound_lang: text, gender: text, top_notes: [{…}, …], middle_notes: [{…}, …], base_notes: [{…}, …], notes: [{…}, …], perfumer1_id: number-as-text, perfumer2_id: number-as-text, perfumer3_id: number-as-text, perfumer4_id: number-as-text, bottle_designer: text, limited_edition: text, seasonal: text, bottle_edition: text, concentration_edition: text, ce_perfume_id: number-as-text, be_perfume_id: number-as-text, pic_name: text, total_votings: number-as-text, total_votings_dur: number-as-text, total_votings_sillage: number-as-text, total_votings_bottle: number-as-text, total_votings_pricing: number-as-text, avg_voting: number, avg_voting_dur: number, avg_voting_sillage: number, avg_voting_bottle: number, avg_voting_pricing: number, voting_distribution: text, voting_distribution_dur: text, voting_distribution_sillage: text, voting_distribution_bottle: text, voting_distribution_pricing: text, total_reviews: number, total_reviews_en: number-as-text}, i: [text, …], c_total: [number, …], c: [[{…}, …], …], c_poles: [{ct: number, n: text, c: text, cd: text}, …], wr: [], wr_lists: {collection_buttons: [{…}, …]}}
 ```
 
+### With a few entries in the account
+
+Recorded on the same day, after the owner of the test account added perfumes to two lists,
+rated one, logged a wear and wrote a personal note, on the site itself.
+
+`GET /wardrobe`
+
+```
+{login_status: number, nick_name: text, user_id: number-as-text, collection_buttons: [{type: text, icon: text, name: text, nr: number-as-text, in_wr: number}, …], url_web: text, note: {id: number, text: text, date: number}, has_rating: bool, has_classification: bool}
+```
+
+`GET /wardrobe?type=have`
+
+```
+{login_status: number, nick_name: text, user_id: number-as-text, wr: [{id: number-as-text, p_id: number-as-text, p_name: text, p_name_url: text, concentration: text, gender: text, url_pic: text, release_year: number-as-text, b_id: number-as-text, b_name: text, date_added: number-as-text, quantity: number-as-text, bottle_size: text, paid: number-as-text, paid_currency: text, worn: number, last_worn: number, note: text, ml_left: null}, …], list_details: {id: number, name: text, items: null, order: number, icon: text, hidden: text, notes: text}, url_web: text, order: text}
+```
+
+`GET /wardrobe?type=want`
+
+```
+{login_status: number, nick_name: text, user_id: number-as-text, wr: [{id: number-as-text, p_id: number-as-text, p_name: text, p_name_url: text, concentration: text, gender: text, url_pic: text, release_year: number-as-text, b_id: number-as-text, b_name: text, date_added: number-as-text, quantity: number-as-text, bottle_size: text, paid: number-as-text, paid_currency: text, worn: number, last_worn: number, note: text, ml_left: null}, …], list_details: {id: number, name: text, items: null, order: number, icon: text, hidden: text, notes: text}, url_web: text, order: text}
+```
+
+`GET /wardrobe?overview=1&per=20`
+
+```
+{login_status: number, nick_name: text, user_id: number-as-text, version: number-as-text, per: number, collections: [{type: text, icon: text, name: text, nr: number, order: text, wr: [{…}, …]}, …]}
+```
+
+`GET /shelfcontrol?list=have`
+
+```
+{status: text, list: number, rows: [{id: number, p: number, title: text, pic: text, brand: number, country: number, year: number, gender: text, conc: text, be: number, ratings: [null, …], community: number, votes: number, qty: number, bottle: text, ml: null, paid: number, cur: text, memo: text, added: number, last: number, worn: number, perfumers: [], accords: [number, …], seasons: [number, …], occasions: [number, …], notes: [number, …], custom: {…}, photos: [], statement: number, st_text: text, st_lang: text, review: number}, …], brands: {<number>: text, …}, countries: {<number>: [text, …], …}, notes: {<number>: text, …}, accords: {<number>: text, …}, perfumers: {<number>: text, …}, classes: {<number>: text, …}, groups: {occasion: text, season: text}, colors: {<number>: [text, …], …}, columns: [], views: [], lists: [{id: number, type: text, name: text, icon: text, count: number}, …]}
+```
+
+`GET /users/<own nick>`
+
+```
+{user: {id: number, nick_name: text, photo: text, cover: text, gender: text, country_id: number, country: text, country_code: text, reg_date: number, scores: number, followers: number-as-text, following: number-as-text, is_own: number, is_following: number, can_message: number, wearing: {id: number, p_name: text, p_name_url: text, concentration: text, gender: text, b_name: text, b_name_url: text, url_image_240: text, since: number, since_text: text}, stats: {reviews: number, statements: number, photos: number}, collection: {have: number, had: number, want: number, tested: number, memo: number, filling: number, mini: number}, lists: []}}
+```
+
+`GET /users/<own nick>/collection?type=have`
+
+```
+{type: text, perfumes: [{id: number, p_name: text, p_name_url: text, concentration: text, gender: text, release_year: number, b_id: number, b_name: text, b_name_url: text, url_image_240: text}, …]}
+```
+
+`GET /tracker`
+
+```
+{login_status: number, nick_name: text, user_id: number-as-text, wearing_perfume_id: number-as-text, wearing_perfume_date: number-as-text, p_id: number-as-text, p_name: text, p_name_url: text, pic_name: text, p_gender: text, b_id: number-as-text, b_name: text, count: number-as-text, url_pic: text, l_id: number-as-text, layered_with: null, perfumes: {lastworn: [{…}, …]}}
+```
+
+`GET /tracker_overview?offset=0&limit=20`
+
+```
+{login_status: number, has_more: bool, total_count: number, offset: number, limit: number, items: [{l_id: number, p_id: number, p_name: text, con_ext_name: text, p_name_url: text, b_name: text, b_name_url: text, url_pic: text, release_year: null, concentration: null, wear_date: number, wear_date_readable: text, statistics: {…}, layered_with_id: null, layered_with: null, comment: null}, …]}
+```
+
+`GET /tracker_calendar`
+
+```
+{login_status: number, year: number, month: number, today: text, is_current_month: bool, today_day: number, days_in_month: number, leading_blanks: number, week: {start: number, weekend: [number, …]}, min_year: number, max_year: number, totals: {wears: number, unique: number}, items: [{l_id: number, p_id: number, p_name: text, con_ext_name: text, p_name_url: text, b_name: text, b_name_url: text, url_pic: text, release_year: null, concentration: null, wear_date: number, wear_date_readable: text, statistics: {…}, layered_with_id: null, layered_with: null, comment: null, day: number, url_pic_small: text}, …]}
+```
+
+`GET /tracker_stats`
+
+```
+{hero: {total_wears: number-as-text, unique_fragrances: number-as-text, first_wear: number-as-text, layered_wears: number-as-text}, top_fragrances: [{cnt: number-as-text, last_date: number-as-text, p_name: text, p_name_url: text, p_id: number-as-text, pic_name: text, b_name: text, b_name_url: text, url_pic: text}, …], top_brands: [{cnt: number-as-text, b_name: text, b_name_url: text}, …], by_daytime: [{period: text, c: number}, …], by_weekday: [{d: number, c: number}, …], genders: [{gender: text, c: number-as-text}, …], scent_types: [{n: text, c: text, p: number-as-text}, …], insights: {wardrobe_total: number, wardrobe_worn: number, most_loyal: null, most_neglected: null}}
+```
+
+`GET /notes_list?page=1&per_page=20`
+
+```
+{login_status: number, nick_name: text, user_id: number-as-text, notes: [{id: number-as-text, p_id: number-as-text, text: text, date: text, perfume: {…}}, …], total_notes: number-as-text, page: number, per_page: number, total_pages: number}
+```
+
+`GET /sotd`
+
+```
+{wearing: bool, p_id: number, name: text, brand: text, image: text, since: number}
+```
+
+`GET /rating?p_id=120220`
+
+```
+{login_status: number, nick_name: text, user_id: number-as-text, ratings: {scent: number-as-text, durability: number-as-text, sillage: number-as-text, bottle: number-as-text, pricing: number-as-text}}
+```
+
+`GET /rating?p_id=229262`
+
+```
+{login_status: number, nick_name: text, user_id: number-as-text, ratings: []}
+```
+
+`GET /wardrobe?p_id=120220`
+
+```
+{login_status: number, nick_name: text, user_id: number-as-text, collection_buttons: [{type: text, icon: text, name: text, nr: number-as-text, in_wr: number}, …], url_web: text, note: {id: number-as-text, text: text, date: number-as-text}, has_rating: bool, has_classification: bool}
+```
+
+`GET /tracker_calendar?y=2026&m=11`
+
+```
+{login_status: number, year: number, month: number, today: text, is_current_month: bool, today_day: number, days_in_month: number, leading_blanks: number, week: {start: number, weekend: [number, …]}, min_year: number, max_year: number, totals: {wears: number, unique: number}, items: [{l_id: number, p_id: number, p_name: text, con_ext_name: text, p_name_url: text, b_name: text, b_name_url: text, url_pic: text, release_year: null, concentration: null, wear_date: number, wear_date_readable: text, statistics: {…}, layered_with_id: null, layered_with: null, comment: null, day: number, url_pic_small: text}, …]}
+```
