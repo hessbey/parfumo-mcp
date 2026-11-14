@@ -259,9 +259,9 @@ impl ParfumoClient {
         // Through the application interface when a session of it is held and it gives the
         // list with certainty; the ShelfControl page otherwise.
         if self.has_app_session()
-            && let Some(shelf) = self.app_shelf(reference).await?
+            && let Some(answer) = crate::app::settle(self.app_shelf(reference).await)
         {
-            return Ok(shelf);
+            return answer;
         }
         let not_found = || ClientError::NotFound(format!("collection '{}' (use parfumo_list_collections)", reference.trim()));
         let slug = match direct_list_slug(reference) {

@@ -69,6 +69,8 @@ enum Twist {
     Renamed,
     /// A nickname that cannot be written as it is in an address.
     Nick,
+    /// The token is refused once the sheet was given.
+    RefusedDetails,
 }
 
 #[derive(Default)]
@@ -185,6 +187,9 @@ async fn handler(State(site): State<Arc<Site>>, method: Method, uri: Uri, header
     let query: HashMap<String, String> = url::form_urlencoded::parse(uri.query().unwrap_or_default().as_bytes()).into_owned().collect();
     let param = |key: &str| query.get(key).map(String::as_str).unwrap_or_default();
     let twist = *site.twist.lock().unwrap();
+    if twist == Some(Twist::RefusedDetails) && uri.path() == "/app/v1/wardrobe" {
+        return (StatusCode::UNAUTHORIZED, r#"{"status":"error","message":"Authentication required"}"#).into_response();
+    }
     let nick = if twist == Some(Twist::Nick) { "test%20user%2B%C3%A9" } else { "testuser" };
     match uri.path() {
         // Like a site that would answer with the default list for one it does not know.
@@ -455,10 +460,22 @@ async fn the_lists_with_what_is_hidden_stay_on_the_web_page() {
 async fn a_refused_token_is_not_sent_again() {
     let (c, site) = logged_in().await;
     site.refusing.store(true, Ordering::SeqCst);
-    assert_eq!(c.shelf("have").await.unwrap_err(), ClientError::LoginRequired);
-    assert_eq!(asked(&site), ["/app/v1/shelfcontrol?list=have"]);
-    // The token is forgotten: the next read is the one of the web site.
+    // One refusal, then the web page answers the same read at once: no error about the session.
+    let shelf = c.shelf("have").await.unwrap();
+    assert_eq!(asked(&site), ["/app/v1/shelfcontrol?list=have", "/account/shelfcontrol/have"]);
+    assert_eq!((shelf.list.id, shelf.items[0].perfume_id.as_str()), (1, "Dior/Sauvage_Eau_de_Toilette"), "the page of the web site");
+    // The token is forgotten: the next read is the one of the web site only.
     assert!(!c.has_app_session());
     assert_eq!(c.shelf("have").await.unwrap().list.id, 1);
     assert_eq!(asked(&site), ["/account/shelfcontrol/have"]);
+}
+
+#[tokio::test]
+async fn a_token_refused_in_the_middle_of_a_read_leaves_it_to_the_web_site() {
+    let (c, site) = logged_in().await;
+    *site.twist.lock().unwrap() = Some(Twist::RefusedDetails);
+    let shelf = c.shelf("have").await.unwrap();
+    assert_eq!(asked(&site), ["/app/v1/shelfcontrol?list=have", "/app/v1/wardrobe?type=have", "/account/shelfcontrol/have"]);
+    assert_eq!(shelf.items[0].perfume_id, "Dior/Sauvage_Eau_de_Toilette", "nothing of the half-read sheet is kept");
+    assert!(!c.has_app_session());
 }
