@@ -283,9 +283,12 @@ async fn a_page_without_rows_is_the_last_one() {
 async fn a_refused_token_is_not_sent_again() {
     let (c, site) = logged_in().await;
     site.refusing.store(true, Ordering::SeqCst);
-    assert_eq!(c.get_note("311", 1).await.unwrap_err(), ClientError::LoginRequired);
-    assert_eq!(asked(&site), ["/app/v1/fragrance_notes?feature=note&note_id=311&page=1&per_page=20"]);
-    // The token is forgotten: the next read is the one of the web site.
+    // One refusal, then the web page answers the same read at once.
+    c.get_note("Bergamot", 1).await.unwrap();
+    let seen = asked(&site);
+    assert_eq!(seen.len(), 2, "{seen:?}");
+    assert!(seen[0].starts_with("/app/v1/fragrance_notes?") && seen[1] == "/Fragrance_Note/Bergamot", "{seen:?}");
+    // The token is forgotten: the next read asks the web site only.
     assert!(!c.has_app_session());
     c.get_note("Bergamot", 1).await.unwrap();
     assert_eq!(asked(&site), ["/Fragrance_Note/Bergamot"]);

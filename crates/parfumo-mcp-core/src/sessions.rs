@@ -425,23 +425,32 @@ impl Sessions {
 
     /// Before a public read: gives the user's public client the session of the application
     /// interface held by their linked account, so that the database tools use it. The public
-    /// client still reads web pages without the account's cookies. Without a linked account,
-    /// or when its session cannot be checked, the public client has no token and reads the
-    /// web pages only.
+    /// client still reads web pages without the account's cookies.
+    ///
+    /// The web session of the account is neither probed nor touched here: a public read
+    /// must not depend on it. In credentials mode a missing session of the application
+    /// interface is asked for once, then left alone for a while if the login fails. Without
+    /// a linked account, the public client has no token and reads the web pages only.
     pub async fn lend_app_session(&self, user_id: i64, public: &ParfumoClient) {
-        let linked = matches!(self.db.link_get(user_id), Ok(Some(_)));
-        match linked.then_some(()) {
-            Some(()) => match self.account_client(user_id).await {
-                Ok(account) => account.share_app_session_with(public),
-                Err(_) => public.forget_app_session(),
-            },
-            None => public.forget_app_session(),
+        let Ok(Some(link)) = self.db.link_get(user_id) else {
+            public.forget_app_session();
+            return;
+        };
+        self.follow_link(user_id, Some(link.rev.as_str()));
+        let Ok(account) = self.client_for(user_id) else {
+            public.forget_app_session();
+            return;
+        };
+        // Credentials Parfumo already refused are not sent to it again.
+        if !matches!(link.status.as_str(), STATUS_REAUTH | STATUS_EXPIRED) {
+            let _ = self.ensure_app_session(user_id, &account, &link).await;
         }
+        account.share_app_session_with(public);
     }
 
     /// After a public read: when the site refused the token that was lent, the account
-    /// forgets it too, in memory and in the database. The next check of the account logs in
-    /// to the application interface again, once.
+    /// forgets it too, in memory and in the database. The next read logs in to the
+    /// application interface again, once.
     pub fn return_app_session(&self, user_id: i64, public: &ParfumoClient) {
         if public.has_app_session() {
             return;
@@ -449,7 +458,6 @@ impl Sessions {
         let account = self.clients.lock().unwrap_or_else(|p| p.into_inner()).get(&user_id).cloned();
         let Some(account) = account.filter(|a| a.has_app_session()) else { return };
         account.forget_app_session();
-        self.forget_verified(user_id);
         if let (Ok(cookies), Ok(Some(link))) = (self.encrypt_cookies(user_id, &account), self.db.link_get(user_id)) {
             let _ = self.db.link_update_session(user_id, Some(&cookies), &link.status, false);
         }
