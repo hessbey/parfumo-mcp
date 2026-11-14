@@ -96,11 +96,12 @@ impl ParfumoClient {
     }
 
     /// What `GET /users/{nick}` tells of the member asked for. `None` for a nickname the
-    /// interface does not know (the application expects a 404, which was not recorded) and
-    /// for an answer about someone else: the web site then says what there is.
+    /// interface does not know and for an answer about someone else: the web site then says
+    /// what there is. The refusal of an unknown nickname was not recorded (the application
+    /// expects a 404), so any refusal of the request is taken for one.
     async fn app_member(&self, nick: &str) -> Result<Option<Value>, ClientError> {
         let answer = match self.app_get(&format!("/users/{}", segment(nick)), &[]).await {
-            Err(ClientError::NotFound(_)) => return Ok(None),
+            Err(ClientError::NotFound(_) | ClientError::InvalidInput(_)) => return Ok(None),
             answer => answer?,
         };
         let asked = nick.to_lowercase();
@@ -116,24 +117,30 @@ impl ParfumoClient {
             return Ok(None);
         }
         let (Some(nick), Some(counts)) = (text(&user, "nick_name"), fixed_counts(&user)) else { return Ok(None) };
-        // The tabs of the profile page the interface counts; like the page, it shows none for a zero.
-        let tab = |label: &str, key: &str, path: Option<String>| {
-            let count = user.get("stats").and_then(|stats| whole(stats, key)).filter(|n| *n > 0)?;
-            Some(ProfileCounter { label: label.to_string(), count, url: path.map(|p| self.t.absolute(&p)) })
+        // The tabs of the profile page the interface counts. A count that is missing is not
+        // a zero: the three must be there.
+        let stats = |key: &str| user.get("stats").and_then(|stats| whole(stats, key));
+        let (Some(reviews), Some(statements), Some(photos)) = (stats("reviews"), stats("statements"), stats("photos")) else { return Ok(None) };
+        // Like the page, no tab for a zero.
+        let tab = |label: &str, count: u32, path: Option<String>| {
+            (count > 0).then(|| ProfileCounter { label: label.to_string(), count, url: path.map(|p| self.t.absolute(&p)) })
         };
         let counters = [
-            tab("Reviews", "reviews", Some(routes::user_reviews(&nick))),
-            tab("Statements", "statements", Some(routes::user_statements(&nick))),
+            tab("Reviews", reviews, Some(routes::user_reviews(&nick))),
+            tab("Statements", statements, Some(routes::user_statements(&nick))),
             // Which page of the web site these photos are on is not told.
-            tab("Photos", "photos", None),
+            tab("Photos", photos, None),
         ];
         let wearing = match user.get("wearing") {
-            None | Some(Value::Null) => None,
-            // A perfume is worn and cannot be read: the profile must not say that none is.
+            // Recorded for a member who wears nothing: an explicit null.
+            Some(Value::Null) => None,
+            // A perfume is worn and cannot be read, or the answer does not say: the profile
+            // must not say that none is.
             Some(worn) => match self.app_member_perfume(worn) {
                 Some(perfume) => Some(perfume),
                 None => return Ok(None),
             },
+            None => return Ok(None),
         };
         let collections = FIXED_LISTS
             .iter()
@@ -181,7 +188,7 @@ impl ParfumoClient {
             return Ok(None);
         };
         let answer = match self.app_get(&format!("/users/{}/collection", segment(&nick)), &[pair("type", kind)]).await {
-            Err(ClientError::NotFound(_)) => return Ok(None),
+            Err(ClientError::NotFound(_) | ClientError::InvalidInput(_)) => return Ok(None),
             answer => answer?,
         };
         // The answer names its list: another one is not what was asked.
@@ -209,7 +216,7 @@ impl ParfumoClient {
         // The call takes no page, and only a list of two perfumes was recorded: whether a
         // long one comes whole is not known. The profile counts the list, so a list that
         // is not of that size, or has a row that could not be read, is left to the web site.
-        if items.len() != counts[slot] as usize {
+        if items.len() != rows.len() || items.len() != counts[slot] as usize {
             return Ok(None);
         }
         let call = WardrobeCall { member_id, nick, list_type: kind.to_string(), type_url: type_url.to_string(), total: counts[slot].to_string() };

@@ -86,7 +86,7 @@ pub struct MemberProfile {
 pub struct MemberCollectionItem {
     /// Numeric Parfumo perfume id (`p_id`), accepted as `perfume` by the account tools.
     pub p_id: u64,
-    /// Id of the entry in the member's list.
+    /// Id of the entry in the member's list; `0` when the site did not number the entry.
     pub entry_id: u64,
     /// Perfume name as the site abbreviates it in this list (URL slug, brand not included).
     pub name: String,
