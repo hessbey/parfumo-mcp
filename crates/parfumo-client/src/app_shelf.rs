@@ -73,6 +73,17 @@ fn segment(text: &str) -> String {
     url::form_urlencoded::byte_serialize(text.as_bytes()).collect::<String>().replace('+', "%20")
 }
 
+/// The name of a perfume with its concentration, as the web page titles it:
+/// `Sauvage (Eau de Toilette)`. No recorded row has a concentration, and the interface
+/// names a perfume both ways elsewhere, with it and without: it is added only when the
+/// title does not end with it already.
+fn full_name(title: String, conc: Option<&str>) -> String {
+    match conc {
+        Some(conc) if !title.to_lowercase().trim_end_matches(')').ends_with(&conc.to_lowercase()) => format!("{title} ({conc})"),
+        _ => title,
+    }
+}
+
 /// A row of the sheet, without the address of its perfume, which the sheet does not give.
 /// The fields are those of the web page, read the same way; the member's ratings are out
 /// of 100 here.
@@ -95,16 +106,17 @@ fn shelf_row(sheet: &Value, row: &Value) -> Option<CollectionItem> {
     let whole = |key: &str| number(row, key).filter(|n| *n >= 0.0).map(|n| n as u32);
     let positive = |key: &str| number(row, key).filter(|n| *n > 0.0);
     let day = |key: &str| positive(key).map(|ts| iso_date(ts as i64));
+    let concentration = text(row, "conc");
     Some(CollectionItem {
         entry_id: count(row, "id")?,
         perfume_id: String::new(),
         p_id: count(row, "p")?,
-        name: text(row, "title")?,
+        name: full_name(text(row, "title")?, concentration.as_deref()),
         brand: row.get("brand").and_then(|nr| named(sheet, "brands", nr)),
         url: String::new(),
         year: count(row, "year").and_then(|y| u16::try_from(y).ok()),
         gender: gender(row, "gender"),
-        concentration: text(row, "conc"),
+        concentration,
         my_ratings: MemberRatings { scent: rating(0), durability: rating(1), sillage: rating(2), bottle: rating(3), pricing: rating(4) },
         community_rating: positive("community").map(|v| v as f32),
         community_votes: whole("votes"),

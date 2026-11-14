@@ -253,6 +253,8 @@ impl ParfumoClient {
 
     /// One list of the member's own collection with every row. `reference` is a list id,
     /// slug, alias or name. A custom list given by name costs one more request.
+    /// Only `list` is sure to tell `hidden` and `notes`: the application interface does not
+    /// tell them for the other `lists`, which `shelf_default` gives whole.
     pub async fn shelf(&self, reference: &str) -> Result<Shelf, ClientError> {
         // Through the application interface when a session of it is held and it gives the
         // list with certainty; the ShelfControl page otherwise.

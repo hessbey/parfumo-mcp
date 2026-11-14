@@ -14,7 +14,7 @@ use std::{
 use axum::{
     Router,
     extract::State,
-    http::{HeaderMap, StatusCode, Uri, header},
+    http::{HeaderMap, Method, StatusCode, Uri, header},
     response::{IntoResponse, Response},
 };
 use parfumo_client::{ClientConfig, ClientError, CustomColumn, GlobalLimiter, ParfumoClient};
@@ -41,6 +41,8 @@ const CUSTOM: u64 = 922_018;
 enum Twist {
     /// The member has a custom column, and a value in it.
     Column,
+    /// The member has a custom column, and no value in it.
+    EmptyColumn,
     /// A value of a custom column on a sheet that has no column.
     StrayValue,
     /// The sheet of another list than the one asked.
@@ -51,6 +53,8 @@ enum Twist {
     NoCount,
     /// A row without a title.
     NoTitle,
+    /// Perfumes that have a concentration: one titled without it, one with it.
+    Concentration,
     /// The details of another list than the one asked.
     OtherDetails,
     /// Details that do not say whether the list is hidden.
@@ -69,7 +73,7 @@ enum Twist {
 
 #[derive(Default)]
 struct Site {
-    /// Path and query of every request, in order.
+    /// Path and query of every request, in order; after its method when it is not a `GET`.
     asked: Mutex<Vec<String>>,
     /// Whether the token is refused from now on.
     refusing: AtomicBool,
@@ -97,12 +101,19 @@ fn sheet(nr: u64, twist: Option<Twist>) -> Value {
         }
         row["memo"] = json!(" a note ");
         row["statement"] = json!(12);
+        // And values at the edges of what a row may hold.
+        let row = &mut answer["rows"][1];
+        for (key, value) in [("ratings", json!([100, 5, 0, null, "75"])), ("bottle", json!("0")), ("year", json!(0)), ("gender", json!("weiblich"))] {
+            row[key] = value;
+        }
+        row["review"] = json!(7);
     }
     match twist {
         Some(Twist::Column) => {
             answer["columns"] = json!([{"id": "178", "name": "TestCol", "type": "text"}]);
             answer["rows"][0]["custom"] = json!({"178": "a value"});
         }
+        Some(Twist::EmptyColumn) => answer["columns"] = json!([{"id": "178", "name": "TestCol", "type": "text"}]),
         Some(Twist::StrayValue) => answer["rows"][0]["custom"] = json!({"178": "a value"}),
         Some(Twist::OtherSheet) => answer["list"] = 2.into(),
         Some(Twist::NoCount) => {
@@ -110,6 +121,11 @@ fn sheet(nr: u64, twist: Option<Twist>) -> Value {
         }
         Some(Twist::NoTitle) => {
             answer["rows"][1].as_object_mut().unwrap().remove("title");
+        }
+        Some(Twist::Concentration) => {
+            answer["rows"][0]["conc"] = json!("Eau de Parfum");
+            answer["rows"][1]["conc"] = json!("Eau de Toilette");
+            answer["rows"][1]["title"] = json!("Stronger With You Intensely (Eau de Toilette)");
         }
         Some(Twist::Renamed) => answer["lists"][0]["name"] = json!("Je possède"),
         _ => {}
@@ -149,9 +165,10 @@ fn member(list: &str, twist: Option<Twist>) -> Value {
     answer
 }
 
-async fn handler(State(site): State<Arc<Site>>, uri: Uri, headers: HeaderMap, _body: String) -> Response {
+async fn handler(State(site): State<Arc<Site>>, method: Method, uri: Uri, headers: HeaderMap, _body: String) -> Response {
     let asked = uri.path_and_query().map(|p| p.as_str().to_string()).unwrap_or_default();
-    site.asked.lock().unwrap().push(asked);
+    // A read only asks: anything else shows in what was asked, and fails the test that looks at it.
+    site.asked.lock().unwrap().push(if method == Method::GET { asked } else { format!("{method} {asked}") });
     let json = |answer: Value| (StatusCode::OK, [(header::CONTENT_TYPE, "application/json")], answer.to_string()).into_response();
     // The web site: the page of the list asked, and the default one for a list it does not know.
     if let Some(rest) = uri.path().strip_prefix("/account/shelfcontrol") {
@@ -338,6 +355,26 @@ async fn what_the_member_filled_and_a_hidden_list_are_read() {
         (Some(2), Some("100"), Some(60.0), Some(85.0), Some("USD"))
     );
     assert_eq!((i.private_note.as_deref(), i.has_statement, i.has_review), (Some("a note"), true, false));
+
+    let i = &shelf.items[1];
+    let r = &i.my_ratings;
+    assert_eq!((r.scent, r.durability, r.sillage, r.bottle, r.pricing), (Some(10.0), Some(0.5), Some(0.0), None, Some(7.5)), "0 is a rating");
+    assert_eq!((i.bottle_size.as_deref(), i.year, i.gender.as_deref()), (None, None, Some("women")), "0 is no size and no year");
+    assert_eq!((i.has_statement, i.has_review), (false, true));
+}
+
+#[tokio::test]
+async fn a_name_carries_its_concentration_once() {
+    let (c, site) = logged_in().await;
+    *site.twist.lock().unwrap() = Some(Twist::Concentration);
+    let shelf = c.shelf("have").await.unwrap();
+    assert_eq!(asked(&site), three_calls("have"));
+    // As the web page titles a perfume, whether the interface puts the concentration in the title or not.
+    let named: Vec<_> = shelf.items.iter().map(|i| (i.name.as_str(), i.concentration.as_deref())).collect();
+    assert_eq!(
+        named,
+        [("Hawas Ice / هوس Ice (Eau de Parfum)", Some("Eau de Parfum")), ("Stronger With You Intensely (Eau de Toilette)", Some("Eau de Toilette"))]
+    );
 }
 
 #[tokio::test]
@@ -364,6 +401,7 @@ async fn what_is_not_certain_is_left_to_the_web_site() {
     let details = "/app/v1/wardrobe?type=have".to_string();
     let cases = [
         (Twist::Column, vec![sheet.clone()]),
+        (Twist::EmptyColumn, vec![sheet.clone()]),
         (Twist::StrayValue, vec![sheet.clone()]),
         (Twist::OtherSheet, vec![sheet.clone()]),
         (Twist::OddType, vec![sheet.clone()]),
