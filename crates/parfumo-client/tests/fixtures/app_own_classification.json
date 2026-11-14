@@ -1,0 +1,275 @@
+{
+ "status": "success",
+ "locked": 0,
+ "groups": [
+  {
+   "c": 2,
+   "name": "Occasion",
+   "options": [
+    {
+     "ct": 25,
+     "name": "Evening",
+     "color": "f170a3",
+     "color_dark": "cf5e8b",
+     "voted": 0
+    },
+    {
+     "ct": 6,
+     "name": "Business",
+     "color": "b7b7b7",
+     "color_dark": "9e9e9e",
+     "voted": 0
+    },
+    {
+     "ct": 7,
+     "name": "Night Out",
+     "color": "978be6",
+     "color_dark": "7f75c4",
+     "voted": 0
+    },
+    {
+     "ct": 32,
+     "name": "Leisure",
+     "color": "eee06d",
+     "color_dark": "d2c661",
+     "voted": 0
+    },
+    {
+     "ct": 8,
+     "name": "Sport",
+     "color": "85ddc7",
+     "color_dark": "74c1ae",
+     "voted": 0
+    },
+    {
+     "ct": 5,
+     "name": "Daily",
+     "color": "97d3ed",
+     "color_dark": "84b8cf",
+     "voted": 0
+    }
+   ]
+  },
+  {
+   "c": 3,
+   "name": "Season",
+   "options": [
+    {
+     "ct": 9,
+     "name": "Spring",
+     "color": "aed46d",
+     "color_dark": "97b95e",
+     "voted": 0
+    },
+    {
+     "ct": 10,
+     "name": "Summer",
+     "color": "f9cb46",
+     "color_dark": "dbb23e",
+     "voted": 0
+    },
+    {
+     "ct": 11,
+     "name": "Fall",
+     "color": "d2a6b5",
+     "color_dark": "b58f9c",
+     "voted": 0
+    },
+    {
+     "ct": 12,
+     "name": "Winter",
+     "color": "94c1fb",
+     "color_dark": "80a7da",
+     "voted": 0
+    }
+   ]
+  },
+  {
+   "c": 1,
+   "name": "Style",
+   "options": [
+    {
+     "ct": 3,
+     "name": "Modern",
+     "color": "afb8c2",
+     "color_dark": "979fa8",
+     "voted": 0
+    },
+    {
+     "ct": 4,
+     "name": "Classic",
+     "color": "bc9069",
+     "color_dark": "a07957",
+     "voted": 0
+    },
+    {
+     "ct": 1,
+     "name": "Feminine",
+     "color": "ec93ec",
+     "color_dark": "cd7fcd",
+     "voted": 0
+    },
+    {
+     "ct": 2,
+     "name": "Masculine",
+     "color": "7ca5eb",
+     "color_dark": "698cca",
+     "voted": 0
+    }
+   ]
+  },
+  {
+   "c": 4,
+   "name": "Type",
+   "options": [
+    {
+     "ct": 35,
+     "name": "Animal",
+     "color": "bdabad",
+     "color_dark": "a39395",
+     "voted": 0
+    },
+    {
+     "ct": 26,
+     "name": "Aquatic",
+     "color": "7bd2ec",
+     "color_dark": "6bb7ce",
+     "voted": 0
+    },
+    {
+     "ct": 13,
+     "name": "Floral",
+     "color": "d3d3d3",
+     "color_dark": "b9b9b9",
+     "voted": 0
+    },
+    {
+     "ct": 14,
+     "name": "Chypre",
+     "color": "8ac4ad",
+     "color_dark": "76a995",
+     "voted": 0
+    },
+    {
+     "ct": 38,
+     "name": "Creamy",
+     "color": "cdcdbc",
+     "color_dark": "b3b3a4",
+     "voted": 0
+    },
+    {
+     "ct": 15,
+     "name": "Earthy",
+     "color": "a77c81",
+     "color_dark": "8b666a",
+     "voted": 0
+    },
+    {
+     "ct": 16,
+     "name": "Fougère",
+     "color": "a0a07f",
+     "color_dark": "87876b",
+     "voted": 0
+    },
+    {
+     "ct": 17,
+     "name": "Fresh",
+     "color": "81abfd",
+     "color_dark": "6e92da",
+     "voted": 0
+    },
+    {
+     "ct": 18,
+     "name": "Fruity",
+     "color": "fb84d6",
+     "color_dark": "d971b9",
+     "voted": 0
+    },
+    {
+     "ct": 27,
+     "name": "Gourmand",
+     "color": "fb929f",
+     "color_dark": "d97d89",
+     "voted": 0
+    },
+    {
+     "ct": 31,
+     "name": "Green",
+     "color": "89c876",
+     "color_dark": "75ad65",
+     "voted": 0
+    },
+    {
+     "ct": 37,
+     "name": "Resinous",
+     "color": "e4ae90",
+     "color_dark": "c6977c",
+     "voted": 0
+    },
+    {
+     "ct": 19,
+     "name": "Woody",
+     "color": "d28b77",
+     "color_dark": "b37564",
+     "voted": 0
+    },
+    {
+     "ct": 20,
+     "name": "Leathery",
+     "color": "ac86a2",
+     "color_dark": "917088",
+     "voted": 0
+    },
+    {
+     "ct": 21,
+     "name": "Oriental",
+     "color": "bd578a",
+     "color_dark": "9d4571",
+     "voted": 0
+    },
+    {
+     "ct": 22,
+     "name": "Powdery",
+     "color": "dfbcd8",
+     "color_dark": "c3a4bd",
+     "voted": 0
+    },
+    {
+     "ct": 36,
+     "name": "Smoky",
+     "color": "9d9d9d",
+     "color_dark": "858585",
+     "voted": 0
+    },
+    {
+     "ct": 34,
+     "name": "Sweet",
+     "color": "ca95fd",
+     "color_dark": "ae80db",
+     "voted": 0
+    },
+    {
+     "ct": 33,
+     "name": "Synthetic",
+     "color": "9cb1e8",
+     "color_dark": "8698c8",
+     "voted": 0
+    },
+    {
+     "ct": 23,
+     "name": "Spicy",
+     "color": "8eb3ae",
+     "color_dark": "799995",
+     "voted": 0
+    },
+    {
+     "ct": 24,
+     "name": "Citrus",
+     "color": "e2d832",
+     "color_dark": "c6be2d",
+     "voted": 0
+    }
+   ]
+  }
+ ]
+}
