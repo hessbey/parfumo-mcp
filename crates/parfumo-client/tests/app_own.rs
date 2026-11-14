@@ -61,6 +61,10 @@ const LOCKED: u64 = 700_012;
 const NOT_A_FORM: u64 = 700_013;
 /// A form with a label that lost its identifier.
 const BROKEN_FORM: u64 = 700_014;
+/// The whole form, under a status other than success.
+const NOT_A_SUCCESS: u64 = 700_015;
+/// A form with a label that says nothing of the member's vote.
+const NO_FLAG: u64 = 700_016;
 /// A number the interface answers 404 to, on both calls.
 const UNKNOWN: u64 = 999_999;
 
@@ -140,6 +144,10 @@ async fn handler(State(site): State<Arc<Site>>, method: Method, uri: Uri, header
         ("/app/v1/classification", NOT_A_FORM) => json(r#"{"status":"error","message":"Perfume not found"}"#.into()),
         ("/app/v1/classification", BROKEN_FORM) => json(form(|f| {
             option(f, "Fresh").as_object_mut().unwrap().remove("ct");
+        })),
+        ("/app/v1/classification", NOT_A_SUCCESS) => json(form(|f| f["status"] = "pending".into())),
+        ("/app/v1/classification", NO_FLAG) => json(form(|f| {
+            option(f, "Winter").as_object_mut().unwrap().remove("voted");
         })),
         _ => (StatusCode::NOT_FOUND, r#"{"error":"Not found"}"#).into_response(),
     }
@@ -246,14 +254,17 @@ async fn the_classification_form_names_the_labels_as_the_web_panel_does() {
 
     let mut groups: Vec<&str> = choices.iter().map(|c| c.group.as_str()).collect();
     groups.dedup();
-    assert_eq!(groups, ["Occasion", "Season", "Style", "Type"], "the order of the answer, each group in one run");
+    assert_eq!(groups, ["Type", "Style", "Season", "Occasion"], "the order of the web panel, each group in one run");
     let labels: Vec<&str> = choices.iter().filter(|c| c.group == "Season").map(|c| c.label.as_str()).collect();
     assert_eq!(labels, ["Spring", "Summer", "Fall", "Winter"]);
 
-    // `c` and `ct` are the numbers of the web panel, which the vote of the web site takes.
-    let key = |c: &ClassChoice| (c.group.clone(), c.label.clone(), c.group_id, c.label_id);
+    // `c` and `ct` are the numbers of the web panel, which the vote of the web site takes:
+    // the form is the one the web panel gives, label for label, but for the vote it shows.
     let web = parse::parse_classify_panel(WEB_CLASSIFY_PANEL).unwrap();
-    assert_eq!(choices.iter().map(key).collect::<BTreeSet<_>>(), web.iter().map(key).collect::<BTreeSet<_>>());
+    let web_without_vote: Vec<ClassChoice> = web.iter().map(|c| ClassChoice { voted: false, ..c.clone() }).collect();
+    assert_eq!(choices, web_without_vote);
+    let ids: BTreeSet<(u64, u64)> = choices.iter().map(|c| (c.group_id, c.label_id)).collect();
+    assert_eq!(ids.len(), choices.len(), "no two labels share their identifiers");
     let night = choices.iter().find(|c| c.label == "Night Out").unwrap();
     let vote = calls::classification_vote(NO_VOTE, night.group_id, night.label_id, true);
     assert_eq!((vote.form["c"].as_str(), vote.form["ct"].as_str()), ("2", "7"));
@@ -266,7 +277,7 @@ async fn a_form_whose_meaning_was_not_recorded_is_read_on_the_web_panel() {
     let choices = c.my_classification_of(VOTED).await.unwrap();
     assert_eq!(asked(&site), ["GET /app/v1/classification?p_id=700011", "GET /api/alive", "POST /action/perfume/perfume_classify_panel.php"]);
     assert_eq!(voted(&choices), ["Fresh"], "the vote the web panel shows");
-    for p_id in [LOCKED, NOT_A_FORM, UNKNOWN] {
+    for p_id in [LOCKED, NOT_A_FORM, NOT_A_SUCCESS, NO_FLAG, UNKNOWN] {
         assert_eq!(voted(&c.my_classification_of(p_id).await.unwrap()), ["Fresh"], "{p_id}");
         assert_eq!(
             asked(&site),
@@ -290,6 +301,37 @@ async fn a_refused_token_is_not_sent_again_and_the_web_site_answers() {
     assert_eq!(c.own_nick().await.unwrap(), "testuser");
     assert_eq!(voted(&c.my_classification_of(NO_VOTE).await.unwrap()), ["Fresh"]);
     assert_eq!(asked(&site), ["GET /account/notifications", "POST /action/perfume/perfume_classify_panel.php"]);
+}
+
+#[tokio::test]
+async fn each_read_whose_call_is_refused_is_answered_by_the_web_site() {
+    // The nickname.
+    let (c, site) = logged_in().await;
+    site.refusing.store(true, Ordering::SeqCst);
+    assert_eq!(c.own_nick().await.unwrap(), "testuser");
+    assert_eq!(asked(&site), ["GET /app/v1/auth/me", "GET /account/notifications"]);
+    assert!(!c.has_app_session());
+    // The one the web page gave is kept as well: nothing more is asked.
+    assert_eq!(c.own_nick().await.unwrap(), "testuser");
+    assert!(asked(&site).is_empty());
+
+    // The classification.
+    let (c, site) = logged_in().await;
+    site.refusing.store(true, Ordering::SeqCst);
+    assert_eq!(voted(&c.my_classification_of(NO_VOTE).await.unwrap()), ["Fresh"]);
+    assert_eq!(asked(&site), ["GET /app/v1/classification?p_id=9438", "GET /api/alive", "POST /action/perfume/perfume_classify_panel.php"]);
+    assert!(!c.has_app_session());
+}
+
+#[tokio::test]
+async fn the_nickname_of_the_session_names_the_pages_the_web_site_is_asked_for() {
+    let (c, site) = logged_in().await;
+    // The page itself is not served by the fake: what matters is the address asked.
+    let _ = c.my_ratings_page("scent", "d_desc", 1).await;
+    let seen = asked(&site);
+    assert_eq!(seen.len(), 2, "{seen:?}");
+    assert_eq!(seen[0], "GET /app/v1/auth/me");
+    assert!(seen[1].starts_with("GET /Users/testuser/"), "{seen:?}");
 }
 
 #[tokio::test]

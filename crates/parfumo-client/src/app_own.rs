@@ -9,6 +9,11 @@
 //!   without any vote was recorded;
 //! - a call answered 404: what the interface says of a perfume it does not know was not
 //!   recorded, and the web panel words its own refusal.
+//!
+//! One reading goes beyond the recordings, which hold a perfume rated on its five scales and
+//! perfumes not rated at all: a scale the answer does not name, or names without a value, is
+//! read as not rated. The empty list of a perfume not rated points to it and the application
+//! reads it so; whatever else a scale may hold that is not a rating goes to the web panel.
 
 use serde_json::Value;
 
@@ -47,8 +52,9 @@ impl ParfumoClient {
 
     /// The member's five ratings of a perfume (`GET /rating`), out of 10 as the web panel
     /// gives them: the interface counts them out of 100. A perfume not rated answers an
-    /// empty list; a scale the answer does not name, or names without a value, is not rated.
-    /// `None` when the answer is not the member's, or holds what was never recorded.
+    /// empty list; a scale the answer does not name, or names without a value, is taken as
+    /// not rated (never recorded: see the module). `None` when the answer is not the
+    /// member's, or holds a value that is not a rating above 0.
     pub(crate) async fn app_my_ratings_of(&self, p_id: u64) -> Result<Option<MemberRatings>, ClientError> {
         let Some(answer) = served(self.app_get("/rating", &[pair("p_id", p_id)]).await)? else { return Ok(None) };
         // Answered as to a visitor: an empty list would not mean "not rated".
@@ -82,7 +88,7 @@ impl ParfumoClient {
 
     /// The classification form of a perfume (`GET /classification`): every label with the
     /// identifiers the vote of the web site takes (`c` and `ct`, the same numbers as on the
-    /// web panel), in the order of the answer. `None` unless the answer is the open form
+    /// web panel), in the order of the web panel. `None` unless the answer is the open form
     /// without any vote of the member, the only one whose meaning was recorded.
     pub(crate) async fn app_my_classification_of(&self, p_id: u64) -> Result<Option<Vec<ClassChoice>>, ClientError> {
         let Some(answer) = served(self.app_get("/classification", &[pair("p_id", p_id)]).await)? else { return Ok(None) };
@@ -92,7 +98,9 @@ impl ParfumoClient {
         }
         let groups = answer.get("groups").and_then(Value::as_array).ok_or_else(|| outdated("no groups"))?;
         let mut out = Vec::new();
-        for group in groups {
+        // The web panel shows the groups the other way round (`Type` first) and the labels of
+        // a group in the same order: the tools list them alike whichever side answered.
+        for group in groups.iter().rev() {
             let (Some(group_id), Some(name)) = (count(group, "c"), text(group, "name")) else {
                 return Err(outdated("group without id or title"));
             };
