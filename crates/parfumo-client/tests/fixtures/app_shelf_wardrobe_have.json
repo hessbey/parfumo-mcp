@@ -1,0 +1,60 @@
+{
+ "login_status": 1,
+ "nick_name": "testuser",
+ "user_id": "1",
+ "wr": [
+  {
+   "id": "119640142",
+   "p_id": "229262",
+   "p_name": "Hawas Ice / هوس Ice",
+   "p_name_url": "hawas-ice-ice",
+   "concentration": "",
+   "gender": "maennlich",
+   "url_pic": "https://media.parfumo.com/perfumes/43/436fef-hawas-ice-rasasi_1200.jpg?width=240&aspect_ratio=1:1",
+   "release_year": "2023",
+   "b_id": "1135",
+   "b_name": "Rasasi",
+   "date_added": "1794602494",
+   "quantity": "1",
+   "bottle_size": "",
+   "paid": "0.00",
+   "paid_currency": "EUR",
+   "worn": 0,
+   "last_worn": 0,
+   "note": "",
+   "ml_left": null
+  },
+  {
+   "id": "119640117",
+   "p_id": "120220",
+   "p_name": "Emporio Armani - Stronger With You Intensely",
+   "p_name_url": "emporio-armani-stronger-with-you-intensely-1",
+   "concentration": "",
+   "gender": "maennlich",
+   "url_pic": "https://media.parfumo.com/perfumes/0a/0a5fd7-emporio-armani-stronger-with-you-intensely-giorgio-armani_1200.jpg?width=240&aspect_ratio=1:1",
+   "release_year": "2018",
+   "b_id": "9",
+   "b_name": "Giorgio Armani",
+   "date_added": "1794602472",
+   "quantity": "1",
+   "bottle_size": "",
+   "paid": "0.00",
+   "paid_currency": "EUR",
+   "worn": 0,
+   "last_worn": 0,
+   "note": "",
+   "ml_left": null
+  }
+ ],
+ "list_details": {
+  "id": 1,
+  "name": "I have",
+  "items": null,
+  "order": 0,
+  "icon": "have",
+  "hidden": "No",
+  "notes": ""
+ },
+ "url_web": "https://www.parfumo.com/Users/testuser/Collection",
+ "order": "wr_o"
+}

@@ -1,0 +1,255 @@
+{
+ "status": "success",
+ "list": 1,
+ "rows": [
+  {
+   "id": 119640142,
+   "p": 229262,
+   "title": "Hawas Ice / هوس Ice",
+   "pic": "https://media.parfumo.com/perfumes/43/436fef-hawas-ice-rasasi_1200.jpg?width=240&aspect_ratio=1:1",
+   "brand": 1135,
+   "country": 2,
+   "year": 2023,
+   "gender": "maennlich",
+   "conc": "",
+   "be": 0,
+   "ratings": [
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "community": 7.8,
+   "votes": 1078,
+   "qty": 1,
+   "bottle": "",
+   "ml": null,
+   "paid": 0,
+   "cur": "EUR",
+   "memo": "",
+   "added": 1794602494,
+   "last": 0,
+   "worn": 0,
+   "perfumers": [],
+   "accords": [
+    17,
+    34,
+    18
+   ],
+   "seasons": [
+    10,
+    9
+   ],
+   "occasions": [
+    5,
+    32
+   ],
+   "notes": [
+    28054,
+    3804,
+    3808,
+    2676,
+    2061,
+    3919,
+    7539,
+    2258,
+    17804,
+    6567,
+    2846,
+    72,
+    1894
+   ],
+   "custom": {},
+   "photos": [],
+   "statement": 0,
+   "st_text": "",
+   "st_lang": "",
+   "review": 0
+  },
+  {
+   "id": 119640117,
+   "p": 120220,
+   "title": "Emporio Armani - Stronger With You Intensely",
+   "pic": "https://media.parfumo.com/perfumes/0a/0a5fd7-emporio-armani-stronger-with-you-intensely-giorgio-armani_1200.jpg?width=240&aspect_ratio=1:1",
+   "brand": 9,
+   "country": 109,
+   "year": 2018,
+   "gender": "maennlich",
+   "conc": "",
+   "be": 0,
+   "ratings": [
+    80,
+    90,
+    70,
+    60,
+    90
+   ],
+   "community": 8.3,
+   "votes": 5448,
+   "qty": 1,
+   "bottle": "",
+   "ml": null,
+   "paid": 0,
+   "cur": "EUR",
+   "memo": "",
+   "added": 1794602472,
+   "last": 1794602563,
+   "worn": 1,
+   "perfumers": [
+    283,
+    146
+   ],
+   "accords": [
+    34,
+    27,
+    23
+   ],
+   "seasons": [
+    12,
+    11
+   ],
+   "occasions": [
+    25,
+    7
+   ],
+   "notes": [
+    2408,
+    1365,
+    1525,
+    2486,
+    2871,
+    87
+   ],
+   "custom": {},
+   "photos": [],
+   "statement": 0,
+   "st_text": "",
+   "st_lang": "",
+   "review": 0
+  }
+ ],
+ "brands": {
+  "1135": "Rasasi",
+  "9": "Giorgio Armani"
+ },
+ "countries": {
+  "2": [
+   "United Arab Emirates",
+   "AE"
+  ],
+  "109": [
+   "Italy",
+   "IT"
+  ]
+ },
+ "notes": {
+  "2408": "Pink pepper",
+  "1365": "Chestnut",
+  "1525": "Lavender",
+  "2486": "Sage",
+  "2871": "Vanilla",
+  "87": "Amberwood",
+  "28054": "Frosted apple",
+  "3804": "Italian bergamot",
+  "3808": "Italian lemon",
+  "2676": "Star anise",
+  "2061": "Orange blossom",
+  "3919": "Marine notes",
+  "7539": "Ice accord",
+  "2258": "Plum",
+  "17804": "Ceylonese cardamom",
+  "6567": "Crystallised moss",
+  "2846": "Driftwood",
+  "72": "Amber",
+  "1894": "Musk"
+ },
+ "accords": {
+  "34": "Sweet",
+  "27": "Gourmand",
+  "23": "Spicy",
+  "17": "Fresh",
+  "18": "Fruity"
+ },
+ "perfumers": {
+  "146": "Mane",
+  "283": "Cécile Matton"
+ },
+ "classes": {
+  "12": "Winter",
+  "11": "Fall",
+  "25": "Evening",
+  "7": "Night Out",
+  "10": "Summer",
+  "9": "Spring",
+  "5": "Daily",
+  "32": "Leisure"
+ },
+ "groups": {
+  "occasion": "Occasion",
+  "season": "Season"
+ },
+ "colors": {
+  "34": [
+   "ca95fd",
+   "ae80db"
+  ],
+  "27": [
+   "fb929f",
+   "d97d89"
+  ]
+ },
+ "columns": [],
+ "views": [],
+ "lists": [
+  {
+   "id": 1,
+   "type": "have",
+   "name": "I have",
+   "icon": "https://www.parfumo.com/assets/images/wr_svg/icon_have.svg",
+   "count": 2
+  },
+  {
+   "id": 2,
+   "type": "had",
+   "name": "I had",
+   "icon": "https://www.parfumo.com/assets/images/wr_svg/icon_had.svg",
+   "count": 0
+  },
+  {
+   "id": 3,
+   "type": "want",
+   "name": "Wish List",
+   "icon": "https://www.parfumo.com/assets/images/wr_svg/icon_want.svg",
+   "count": 1
+  },
+  {
+   "id": 4,
+   "type": "memo",
+   "name": "Watch List",
+   "icon": "https://www.parfumo.com/assets/images/wr_svg/icon_memo.svg",
+   "count": 0
+  },
+  {
+   "id": 5,
+   "type": "tested",
+   "name": "Tested",
+   "icon": "https://www.parfumo.com/assets/images/wr_svg/icon_tested.svg",
+   "count": 0
+  },
+  {
+   "id": 6,
+   "type": "filling",
+   "name": "Decants",
+   "icon": "https://www.parfumo.com/assets/images/wr_svg/icon_filling.svg",
+   "count": 0
+  },
+  {
+   "id": 7,
+   "type": "mini",
+   "name": "Miniatures",
+   "icon": "https://www.parfumo.com/assets/images/wr_svg/icon_mini.svg",
+   "count": 0
+  }
+ ]
+}

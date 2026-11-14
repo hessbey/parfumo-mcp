@@ -1,0 +1,69 @@
+{
+ "status": "success",
+ "list": 1,
+ "rows": [],
+ "brands": [],
+ "countries": [],
+ "notes": [],
+ "accords": [],
+ "perfumers": [],
+ "classes": [],
+ "groups": {
+  "occasion": "Occasion",
+  "season": "Season"
+ },
+ "colors": [],
+ "columns": [],
+ "views": [],
+ "lists": [
+  {
+   "id": 1,
+   "type": "have",
+   "name": "I have",
+   "icon": "https://www.parfumo.com/assets/images/wr_svg/icon_have.svg",
+   "count": 0
+  },
+  {
+   "id": 2,
+   "type": "had",
+   "name": "I had",
+   "icon": "https://www.parfumo.com/assets/images/wr_svg/icon_had.svg",
+   "count": 0
+  },
+  {
+   "id": 3,
+   "type": "want",
+   "name": "Wish List",
+   "icon": "https://www.parfumo.com/assets/images/wr_svg/icon_want.svg",
+   "count": 0
+  },
+  {
+   "id": 4,
+   "type": "memo",
+   "name": "Watch List",
+   "icon": "https://www.parfumo.com/assets/images/wr_svg/icon_memo.svg",
+   "count": 0
+  },
+  {
+   "id": 5,
+   "type": "tested",
+   "name": "Tested",
+   "icon": "https://www.parfumo.com/assets/images/wr_svg/icon_tested.svg",
+   "count": 0
+  },
+  {
+   "id": 6,
+   "type": "filling",
+   "name": "Decants",
+   "icon": "https://www.parfumo.com/assets/images/wr_svg/icon_filling.svg",
+   "count": 0
+  },
+  {
+   "id": 7,
+   "type": "mini",
+   "name": "Miniatures",
+   "icon": "https://www.parfumo.com/assets/images/wr_svg/icon_mini.svg",
+   "count": 0
+  }
+ ]
+}

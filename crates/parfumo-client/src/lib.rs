@@ -8,6 +8,7 @@ mod app_db;
 mod app_note;
 mod app_perfumer;
 mod app_rankings;
+mod app_shelf;
 mod app_similar;
 mod client;
 mod error;

@@ -244,6 +244,8 @@ impl ParfumoClient {
     }
 
     /// ShelfControl page of the member's default list ("I have"): all lists with counts.
+    /// Always the web page: the application interface tells whether a list is hidden, and
+    /// its description, for one list per call.
     pub async fn shelf_default(&self) -> Result<Shelf, ClientError> {
         let (_, html) = self.t.get(routes::SHELFCONTROL, None, true, false).await?;
         parse::parse_shelf(&html)
@@ -252,6 +254,13 @@ impl ParfumoClient {
     /// One list of the member's own collection with every row. `reference` is a list id,
     /// slug, alias or name. A custom list given by name costs one more request.
     pub async fn shelf(&self, reference: &str) -> Result<Shelf, ClientError> {
+        // Through the application interface when a session of it is held and it gives the
+        // list with certainty; the ShelfControl page otherwise.
+        if self.has_app_session()
+            && let Some(shelf) = self.app_shelf(reference).await?
+        {
+            return Ok(shelf);
+        }
         let not_found = || ClientError::NotFound(format!("collection '{}' (use parfumo_list_collections)", reference.trim()));
         let slug = match direct_list_slug(reference) {
             Some(slug) => slug,
