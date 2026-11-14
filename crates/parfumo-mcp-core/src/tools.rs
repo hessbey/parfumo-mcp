@@ -168,8 +168,16 @@ impl ParfumoTools {
     {
         let user = caller.0.clone();
         let started = Instant::now();
-        let outcome = match self.state.sessions.public_client_for(user.id) {
-            Ok(client) => f(client).await,
+        let sessions = &self.state.sessions;
+        let outcome = match sessions.public_client_for(user.id) {
+            Ok(client) => {
+                // A linked account lends its session of the application interface: the
+                // database is then read through it, and through the web pages otherwise.
+                sessions.lend_app_session(user.id, &client).await;
+                let outcome = f(client.clone()).await;
+                sessions.return_app_session(user.id, &client);
+                outcome
+            }
             Err(e) => Err(ToolError::new(crate::errors::ErrorCode::UpstreamError, e.to_string())),
         };
         self.finish(&user, tool, target, started, 0, outcome)

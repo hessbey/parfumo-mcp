@@ -233,9 +233,12 @@ async fn once_the_token_is_refused_the_web_site_is_read_again() {
     let (c, site) = client(true).await;
     site.refuses.store(true, Ordering::SeqCst);
 
-    // The refusal is reported and the token forgotten: it is not sent a second time.
-    assert_eq!(c.get_rankings(&RankingKind::Year(2020), 1).await.unwrap_err(), ClientError::LoginRequired);
-    assert!(!c.has_app_session());
+    // The web page answers the refused read at once, and the token is forgotten: it is not
+    // sent a second time.
     let _ = c.get_rankings(&RankingKind::Year(2020), 1).await;
+    assert!(!c.has_app_session());
     assert_eq!(site.asked(), ["/app/v1/perfumes?y_0=2020&page=1&per_page=20&o=nr_desc&g_f=1&g_m=1&g_u=1", "/Release_Years/2020"]);
+    let _ = c.get_rankings(&RankingKind::Year(2020), 1).await;
+    assert_eq!(site.asked().len(), 3);
+    assert_eq!(site.asked()[2], "/Release_Years/2020");
 }

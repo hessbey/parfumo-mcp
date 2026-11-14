@@ -34,6 +34,17 @@ fn error_text(json: &Value) -> Option<String> {
     ["message", "error"].iter().find_map(|k| json.get(k).and_then(Value::as_str)).map(str::to_string)
 }
 
+/// What a read does with the answer of the application interface: `Some` is the result to
+/// return; `None` means the web site must answer instead, because the interface cannot serve
+/// the request or has just refused the session (whose token is then already forgotten).
+pub(crate) fn settle<T>(answer: Result<Option<T>, ClientError>) -> Option<Result<T, ClientError>> {
+    match answer {
+        Ok(Some(value)) => Some(Ok(value)),
+        Ok(None) | Err(ClientError::LoginRequired) => None,
+        Err(e) => Some(Err(e)),
+    }
+}
+
 impl Transport {
     pub(crate) fn app_token(&self) -> Option<String> {
         self.jar.value(TOKEN_NAME, TOKEN_DOMAIN)
@@ -98,6 +109,13 @@ impl ParfumoClient {
     /// Forgets the session token without telling the site.
     pub fn forget_app_session(&self) {
         self.t.set_app_token(None);
+    }
+
+    /// Gives `other` the session token held here, or takes it away when none is held: the
+    /// client that reads public pages without the account's cookies uses the same session
+    /// of the application interface. The token never leaves the two clients.
+    pub fn share_app_session_with(&self, other: &ParfumoClient) {
+        other.t.set_app_token(self.t.app_token().as_deref());
     }
 
     /// Logs in to the application interface with the member's e-mail and password, and

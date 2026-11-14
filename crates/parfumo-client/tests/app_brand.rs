@@ -250,11 +250,15 @@ async fn an_answer_of_another_shape_is_reported_and_a_missing_count_is_not_zero(
 async fn a_refused_token_stops_the_calls_and_the_web_site_serves_the_next_ones() {
     let (c, site) = logged_in().await;
     site.refuse.store(true, Ordering::SeqCst);
-    assert_eq!(c.get_brand("Creed", 1).await.unwrap_err(), ClientError::LoginRequired);
-    assert_eq!(site.take(), ["/app/v1/search?filter=Creed"], "one refusal, and nothing after it");
+    // One refusal, then the web page answers the same read at once: no error about the session.
+    let _ = c.get_brand("Creed", 1).await;
+    let asked = site.take();
+    assert_eq!(&asked[..2], ["/app/v1/search?filter=Creed", "/Perfumes/Creed"], "{asked:?}");
+    assert!(asked[1..].iter().all(|a| !a.starts_with("/app/v1/")), "nothing is asked of the interface after the refusal: {asked:?}");
     assert!(!c.has_app_session(), "the refused token is forgotten");
 
-    assert!(c.get_brand("Creed", 1).await.is_err());
+    // The next reads go to the web site only.
+    let _ = c.get_brand("Creed", 1).await;
     let asked = site.take();
     assert_eq!(asked[0], "/Perfumes/Creed");
     assert!(asked.iter().all(|a| !a.starts_with("/app/v1/")), "{asked:?}");

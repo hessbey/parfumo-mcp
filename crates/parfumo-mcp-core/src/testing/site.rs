@@ -73,6 +73,8 @@ pub struct Site {
     pub app_logins: Arc<AtomicU32>,
     /// When set, the application interface refuses every login.
     pub app_login_refused: Arc<std::sync::atomic::AtomicBool>,
+    /// Every call of the application interface made with a live token: (username, path).
+    pub app_calls: Arc<Mutex<Vec<(String, String)>>>,
 }
 
 impl Site {
@@ -215,8 +217,16 @@ async fn handler(State(site): State<Site>, method: Method, uri: Uri, headers: He
         let Some(user) = site.app_live.lock().unwrap().get(bearer).cloned() else {
             return json(StatusCode::UNAUTHORIZED, "{\"status\":\"error\",\"message\":\"Authorization header required\"}".into());
         };
+        site.app_calls.lock().unwrap().push((user.clone(), call.to_string()));
         return match call {
             "/auth/me" => json(StatusCode::OK, format!("{{\"status\":\"success\",\"user\":{{\"nick_name\":\"{user}\"}}}}")),
+            // One row of the filtered listing, whatever is asked.
+            "/perfumes" => json(
+                StatusCode::OK,
+                "{\"matches\":1,\"rows\":[{\"p_id\":\"63363\",\"p_name\":\"Sauvage (Eau de Toilette)\",\"p_name_url\":\"Sauvage_Eau_de_Toilette\",\
+                 \"b_name\":\"Dior\",\"b_name_url\":\"Dior\",\"p_release_year\":\"2015\",\"p_gender\":\"maennlich\",\"p_total_votings\":\"100\",\"p_avg_voting\":\"80\"}]}"
+                    .into(),
+            ),
             _ => json(StatusCode::NOT_FOUND, "{\"error\":\"Not found\"}".into()),
         };
     }
