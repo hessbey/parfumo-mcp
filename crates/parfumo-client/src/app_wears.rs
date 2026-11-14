@@ -9,6 +9,13 @@
 //! day after). It is therefore handed on as the `wear_id` the tools date, annotate and
 //! delete a wear by. One and the same wear has not been read on both sides.
 //!
+//! The name is `p_name`. Where other answers pair it with a `con_ext_name`, it is the name
+//! as the web page writes it, concentration in brackets (`Sauvage (Eau de Toilette)`), and
+//! `con_ext_name` the name without it; where they pair it with a `concentration`, it is
+//! the bare name. A wear has all three, and the one recorded is of a perfume without a
+//! concentration, where both names are equal: a row that gives a concentration its
+//! `p_name` does not carry is therefore not read.
+//!
 //! Dates keep the convention of the web parser: the local time the site shows the member.
 //! It is read from `wear_date_readable`, the text of the web page. `wear_date` is the
 //! instant, in UTC: it is never handed on as a local time, and only serves to check the text.
@@ -67,12 +74,17 @@ fn comment(row: &Value) -> Result<Option<String>, ()> {
 
 impl ParfumoClient {
     /// A row of the calendar or of the history. `None` when it lacks what designates the
-    /// wear or its perfume: such a row is never dropped, the whole answer is left unread.
+    /// wear or its perfume, or what names it as the web page does: such a row is never
+    /// dropped, the whole answer is left unread.
     fn wear_row(&self, row: &Value) -> Option<Wear> {
         let wear_id = count(row, "l_id")?;
         let id = format!("{}/{}", text(row, "b_name_url")?, text(row, "p_name_url")?);
-        // `p_name` is the name the web page shows, concentration included.
-        let name = text(row, "p_name").or_else(|| text(row, "con_ext_name"))?;
+        let name = text(row, "p_name")?;
+        // The web page names a perfume with its concentration in brackets. Whether
+        // `p_name` does so here was not recorded: a bare name is not handed on in its place.
+        if text(row, "concentration").is_some_and(|concentration| !name.contains(&format!("({concentration})"))) {
+            return None;
+        }
         let comment = comment(row).ok()?;
         if let Some(p_id) = count(row, "p_id") {
             self.remember_perfume(&id, p_id);
@@ -118,12 +130,13 @@ impl ParfumoClient {
             if !recognised(&answer) || number(&answer, "offset") != Some(read as f64) {
                 return Ok(None);
             }
-            let Some(rows) = self.wear_rows(&answer) else { return Ok(None) };
+            // `has_more` was only seen as a boolean. Another shape is not guessed: a wrong
+            // guess would pass a cut history for a whole one.
+            let (Some(rows), Some(more)) = (self.wear_rows(&answer), answer.get("has_more").and_then(Value::as_bool)) else { return Ok(None) };
             read += rows.len();
             let known = wears.len();
             // A wear logged between two calls shifts the windows: a row may come twice.
             wears.extend(rows.into_iter().filter(|w| seen.insert(w.wear_id)));
-            let more = answer.get("has_more").is_some_and(|m| m.as_bool().unwrap_or_else(|| m.as_u64().is_some_and(|n| n > 0)));
             if !more || wears.len() == known {
                 break;
             }

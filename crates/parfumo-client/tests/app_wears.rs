@@ -55,6 +55,8 @@ enum History {
     Rows(Vec<Value>),
     /// The first window of these rows, whatever the one asked.
     FirstWindowOf(Vec<Value>),
+    /// The windows of these rows, each said to be followed by more.
+    Endless(Vec<Value>),
 }
 
 struct Site {
@@ -119,13 +121,14 @@ async fn handler(State(site): State<Arc<Site>>, uri: Uri, headers: HeaderMap, _b
     match uri.path() {
         "/app/v1/tracker_calendar" => json(site.calendar.lock().unwrap().clone()),
         "/app/v1/tracker_overview" => {
-            let (all, offset) = match &*site.history.lock().unwrap() {
+            let (all, offset, endless) = match &*site.history.lock().unwrap() {
                 History::Answer(answer) => return json(answer.clone()),
-                History::Rows(all) => (all.clone(), nr("offset")),
-                History::FirstWindowOf(all) => (all.clone(), 0),
+                History::Rows(all) => (all.clone(), nr("offset"), false),
+                History::FirstWindowOf(all) => (all.clone(), 0, false),
+                History::Endless(all) => (all.clone(), nr("offset"), true),
             };
             let window: Vec<Value> = all.iter().skip(offset).take(nr("limit")).cloned().collect();
-            let has_more = offset + window.len() < all.len();
+            let has_more = endless || offset + window.len() < all.len();
             json(
                 json!({"login_status": 1, "has_more": has_more, "total_count": all.len(), "offset": offset, "limit": nr("limit"), "items": window})
                     .to_string(),
@@ -239,6 +242,12 @@ async fn a_longer_history_is_read_window_after_window() {
     let wears = c.wears_overview().await.unwrap();
     assert_eq!(asked(&site), [window(0), window(20)]);
     assert_eq!(ids(&wears), (0..30).map(|i| L_ID - i).collect::<Vec<_>>());
+
+    // A window that brings nothing new ends the reading, whatever the site says of what follows.
+    site.answer_history(History::Endless(rows(25)));
+    let wears = c.wears_overview().await.unwrap();
+    assert_eq!(asked(&site), [window(0), window(20), window(25)]);
+    assert_eq!(ids(&wears), (0..25).map(|i| L_ID - i).collect::<Vec<_>>());
 }
 
 #[tokio::test]
@@ -298,6 +307,40 @@ async fn the_note_of_a_wear_is_its_comment() {
 }
 
 #[tokio::test]
+async fn a_perfume_is_named_as_the_web_page_names_it() {
+    let (c, site) = logged_in().await;
+    let named = |w: &Wear| (w.perfume_id.clone(), w.name.clone(), w.brand.clone());
+    // Not recorded: the perfume of the recorded wear has no concentration. This is the
+    // perfume of the web fixtures, in the shape the other answers of the interface give a
+    // perfume that has one: `p_name` with the concentration in brackets, `con_ext_name` without.
+    let sauvage = |p_name: &'static str, concentration: Value| {
+        move |row: &mut Value| {
+            (row["b_name"], row["b_name_url"], row["p_name_url"]) = ("Dior".into(), "Dior".into(), "Sauvage_Eau_de_Toilette".into());
+            (row["p_name"], row["con_ext_name"], row["concentration"]) = (p_name.into(), "Sauvage".into(), concentration);
+        }
+    };
+    site.answer_history(History::Rows(vec![row(1, sauvage("Sauvage (Eau de Toilette)", "Eau de Toilette".into()))]));
+    let through_interface = c.wears_overview().await.unwrap();
+    assert_eq!(asked(&site), [FIRST_WINDOW]);
+    assert_eq!(named(&through_interface[0]), ("Dior/Sauvage_Eau_de_Toilette".into(), "Sauvage (Eau de Toilette)".into(), Some("Dior".into())));
+
+    // A name that does not carry the concentration the row gives, in brackets, is not the
+    // name of the web page: the wears are read there, where the same perfume bears the name read above.
+    for other in ["Sauvage", "Sauvage Eau de Toilette"] {
+        site.answer_history(History::Rows(vec![row(1, |_| {}), row(2, sauvage(other, "Eau de Toilette".into()))]));
+        let from_web = c.wears_overview().await.unwrap();
+        assert_eq!(asked(&site), [FIRST_WINDOW, WEB_TRACKER_PATH], "{other}");
+        assert_eq!(named(&from_web[0]), named(&through_interface[0]), "{other}");
+    }
+
+    // No concentration, as `null` or as the empty text of neighbouring answers: the name is all there is.
+    site.answer_history(History::Rows(vec![row(1, sauvage("Sauvage", Value::Null)), row(2, sauvage("Sauvage", "".into()))]));
+    let names: Vec<_> = c.wears_overview().await.unwrap().into_iter().map(|w| w.name).collect();
+    assert_eq!(asked(&site), [FIRST_WINDOW]);
+    assert_eq!(names, ["Sauvage", "Sauvage"]);
+}
+
+#[tokio::test]
 async fn what_is_not_surely_the_wears_asked_is_left_to_the_web_site() {
     let (c, site) = logged_in().await;
     let web_wear = |wears: Vec<Wear>| wears.iter().map(|w| (w.wear_id, w.perfume_id.clone())).collect::<Vec<_>>();
@@ -310,6 +353,17 @@ async fn what_is_not_surely_the_wears_asked_is_left_to_the_web_site() {
 
     let recorded = || serde_json::from_str::<Value>(CALENDAR).unwrap();
     let unsure: Vec<(&str, Value)> = vec![
+        // The year and the month are each checked: one of them right is not the month asked.
+        ("the month asked, of another year", {
+            let mut answer = recorded();
+            answer["year"] = 2025.into();
+            answer
+        }),
+        ("another month of the year asked", {
+            let mut answer = recorded();
+            answer["month"] = 10.into();
+            answer
+        }),
         ("fewer rows than the month counts", {
             let mut answer = recorded();
             answer["totals"]["wears"] = 2.into();
@@ -333,7 +387,8 @@ async fn what_is_not_surely_the_wears_asked_is_left_to_the_web_site() {
         ("a row without the identifier of the wear", month_of(vec![row(1, |_| {}), row(2, |row| row["l_id"] = Value::Null)])),
         ("a row without the address of the brand", month_of(vec![row(1, |row| row["b_name_url"] = Value::Null)])),
         ("a row without the address of the perfume", month_of(vec![row(1, |row| row["p_name_url"] = "".into())])),
-        ("a row without a name", month_of(vec![row(1, |row| (row["p_name"], row["con_ext_name"]) = (Value::Null, Value::Null))])),
+        // `con_ext_name` is the name without its concentration: it does not stand in for the name.
+        ("a row without a name", month_of(vec![row(1, |row| row["p_name"] = Value::Null)])),
         ("a note in a shape never seen", month_of(vec![row(1, |row| row["comment"] = json!({"text": "x"}))])),
     ];
     for (why, answer) in unsure {
@@ -356,6 +411,14 @@ async fn what_is_not_surely_the_wears_asked_is_left_to_the_web_site() {
     site.answer_history(History::Answer(r#"{"login_status":0,"has_more":false,"total_count":0,"offset":0,"limit":20,"items":[]}"#.into()));
     assert_eq!(web_wear(c.wears_overview().await.unwrap()), from_web);
     assert_eq!(asked(&site), [FIRST_WINDOW, WEB_TRACKER_PATH]);
+    // Whether the history goes on, in a shape never seen: a cut history is not taken for a whole one.
+    for has_more in [json!(1), json!("1"), Value::Null] {
+        let mut answer: Value = serde_json::from_str(OVERVIEW).unwrap();
+        answer["has_more"] = has_more.clone();
+        site.answer_history(History::Answer(answer.to_string()));
+        assert_eq!(web_wear(c.wears_overview().await.unwrap()), from_web, "has_more: {has_more}");
+        assert_eq!(asked(&site), [FIRST_WINDOW, WEB_TRACKER_PATH], "has_more: {has_more}");
+    }
 }
 
 #[tokio::test]
