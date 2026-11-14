@@ -255,9 +255,9 @@ impl ParfumoClient {
         // Through the application interface when a session of it is held and the query can
         // be expressed there; the search of the web site otherwise.
         if self.has_app_session()
-            && let Some(listing) = self.app_search_perfumes(q, page).await?
+            && let Some(answer) = crate::app::settle(self.app_search_perfumes(q, page).await)
         {
-            return Ok(listing);
+            return answer;
         }
         let text = q.text.as_deref().map(str::trim).filter(|t| !t.is_empty());
         let has_criteria = text.is_some()
@@ -328,8 +328,10 @@ impl ParfumoClient {
     /// or a `Brand/Perfume` id. The community classification needs a second request; if it
     /// fails the record is returned without it and a warning is added.
     pub async fn get_perfume(&self, r: &str) -> Result<PerfumeDetails, ClientError> {
-        if self.has_app_session() {
-            return self.app_get_perfume(r).await;
+        if self.has_app_session()
+            && let Some(answer) = crate::app::settle(self.app_get_perfume(r).await.map(Some))
+        {
+            return answer;
         }
         let (mut details, ctx) = self.perfume_ctx(r, false).await?;
         match &ctx.class_h {
@@ -372,9 +374,9 @@ impl ParfumoClient {
     /// Long reviews of a perfume, full text, `limit` ≤ 50 per call.
     pub async fn get_perfume_reviews(&self, r: &str, sort: ReviewSort, offset: u32, limit: u32) -> Result<Slice<Review>, ClientError> {
         if self.has_app_session()
-            && let Some(slice) = self.app_perfume_reviews(r, sort, offset, limit).await?
+            && let Some(answer) = crate::app::settle(self.app_perfume_reviews(r, sort, offset, limit).await)
         {
-            return Ok(slice);
+            return answer;
         }
         let n = limit.clamp(1, routes::MAX_SLICE);
         let (_, ctx) = self.perfume_ctx(r, false).await?;
@@ -412,9 +414,9 @@ impl ParfumoClient {
     /// Statements (short reviews) of a perfume, `limit` ≤ 50 per call.
     pub async fn get_perfume_statements(&self, r: &str, sort: ReviewSort, offset: u32, limit: u32) -> Result<Slice<Statement>, ClientError> {
         if self.has_app_session()
-            && let Some(slice) = self.app_perfume_statements(r, sort, offset, limit).await?
+            && let Some(answer) = crate::app::settle(self.app_perfume_statements(r, sort, offset, limit).await)
         {
-            return Ok(slice);
+            return answer;
         }
         let n = limit.clamp(1, routes::MAX_SLICE);
         let (_, ctx) = self.perfume_ctx(r, false).await?;
@@ -481,9 +483,9 @@ impl ParfumoClient {
         // The two lists through the application interface when a session of it is held and
         // it finds the perfume; all of it from the web site otherwise.
         if self.has_app_session()
-            && let Some(found) = self.app_similar_perfumes(r, opts).await?
+            && let Some(answer) = crate::app::settle(self.app_similar_perfumes(r, opts).await)
         {
-            return Ok(found);
+            return answer;
         }
         let (ctx, mut similar) = self.similar_list(r, "similar").await?;
         let mut warnings = Vec::new();
@@ -582,9 +584,9 @@ impl ParfumoClient {
         // Through the application interface when a session of it is held and its search
         // knows the brand; the web page otherwise.
         if self.has_app_session()
-            && let Some(brand) = self.app_get_brand(r, page).await?
+            && let Some(answer) = crate::app::settle(self.app_get_brand(r, page).await)
         {
-            return Ok(brand);
+            return answer;
         }
         let html = self.entity_page(r, routes::PERFUMES_PREFIX, routes::LIVESEARCH_BRAND, page, "brand").await?;
         parse::parse_brand_page(&html, page)
@@ -596,9 +598,9 @@ impl ParfumoClient {
         // Through the application interface when a session of it is held and the number of
         // the perfumer is known; the web page otherwise.
         if self.has_app_session()
-            && let Some(perfumer) = self.app_get_perfumer(r, page).await?
+            && let Some(answer) = crate::app::settle(self.app_get_perfumer(r, page).await)
         {
-            return Ok(perfumer);
+            return answer;
         }
         let html = self.entity_page(r, routes::PERFUMERS_PREFIX, routes::LIVESEARCH_PERFUMER, page, "perfumer").await?;
         parse::parse_perfumer_page(&html, page)
@@ -612,9 +614,9 @@ impl ParfumoClient {
         // the note with certainty (a number, a name one note bears, a top-level category);
         // the web site otherwise.
         if self.has_app_session()
-            && let Some(note) = self.app_note(r, page).await?
+            && let Some(answer) = crate::app::settle(self.app_note(r, page).await)
         {
-            return Ok(note);
+            return answer;
         }
         let (absolute, path) = self.ref_path(r)?;
         if absolute {
@@ -668,9 +670,9 @@ impl ParfumoClient {
         // Through the application interface when a session of it is held and it serves
         // this ranking; the web pages otherwise.
         if self.has_app_session()
-            && let Some(listing) = self.app_rankings(kind, page).await?
+            && let Some(answer) = crate::app::settle(self.app_rankings(kind, page).await)
         {
-            return Ok(listing);
+            return answer;
         }
         let path = routes::ranking(kind);
         if let Some(section) = routes::trends_section(kind) {
