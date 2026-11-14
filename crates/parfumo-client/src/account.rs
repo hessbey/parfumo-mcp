@@ -349,6 +349,13 @@ impl ParfumoClient {
 
     /// Wears of one calendar month (`POST /api/assistant/calendar_month`).
     pub async fn wears_of_month(&self, year: i64, month: u32) -> Result<Vec<Wear>, ClientError> {
+        // Through the application interface when a session of it is held and it answers
+        // the month asked; the fragment of the web site otherwise.
+        if self.has_app_session()
+            && let Some(wears) = self.app_wears_of_month(year, month).await?
+        {
+            return Ok(wears);
+        }
         let form = vec![("y".to_string(), year.to_string()), ("m".to_string(), month.to_string())];
         let body = self.t.post_fragment(routes::WEAR_CALENDAR_MONTH, &form, true, None).await?;
         if body.trim().is_empty() {
@@ -359,6 +366,12 @@ impl ParfumoClient {
 
     /// Wears shown on the tracker overview page, most recent first.
     pub async fn wears_overview(&self) -> Result<Vec<Wear>, ClientError> {
+        // The history of the application interface, when a session of it is held.
+        if self.has_app_session()
+            && let Some(wears) = self.app_wears_overview().await?
+        {
+            return Ok(wears);
+        }
         let (_, html) = self.t.get(routes::WEAR_TRACKER, None, true, false).await?;
         parse::parse_wear_tracker(&html)
     }

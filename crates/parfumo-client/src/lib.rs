@@ -9,6 +9,7 @@ mod app_note;
 mod app_perfumer;
 mod app_rankings;
 mod app_similar;
+mod app_wears;
 mod client;
 mod error;
 mod forum;
