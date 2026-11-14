@@ -1,0 +1,46 @@
+{
+  "user": {
+    "id": 1001,
+    "nick_name": "testuser",
+    "photo": "https://media.parfumo.com/user_photo/placeholder.jpg",
+    "cover": "",
+    "gender": "m",
+    "country_id": 1,
+    "country": "Pitcairn",
+    "country_code": "PN",
+    "reg_date": 1767268800,
+    "scores": 0,
+    "followers": "0",
+    "following": "0",
+    "is_own": 1,
+    "is_following": 0,
+    "can_message": 0,
+    "wearing": {
+      "id": 120220,
+      "p_name": "Emporio Armani - Stronger With You Intensely",
+      "p_name_url": "emporio-armani-stronger-with-you-intensely-1",
+      "concentration": "",
+      "gender": "maennlich",
+      "b_name": "Giorgio Armani",
+      "b_name_url": "Giorgio_Armani",
+      "url_image_240": "https://media.parfumo.com/perfumes/0a/0a5fd7-emporio-armani-stronger-with-you-intensely-giorgio-armani_1200.jpg?width=240&aspect_ratio=1:1",
+      "since": 1767268800,
+      "since_text": "Just now"
+    },
+    "stats": {
+      "reviews": 0,
+      "statements": 0,
+      "photos": 0
+    },
+    "collection": {
+      "have": 2,
+      "had": 0,
+      "want": 1,
+      "tested": 0,
+      "memo": 0,
+      "filling": 0,
+      "mini": 0
+    },
+    "lists": []
+  }
+}

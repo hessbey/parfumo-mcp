@@ -145,6 +145,15 @@ impl ParfumoClient {
     /// Profile of a member. On a logged-in client the page is never cached.
     pub async fn member_profile(&self, reference: &str, cached: bool) -> Result<MemberProfile, ClientError> {
         let nick = self.member_nick(reference)?;
+        // Only the public read goes through the application interface. The uncached one is
+        // that of the account's own tools, which read what the page alone carries: the
+        // signature scent before and after it is changed, the rank.
+        if cached
+            && self.has_app_session()
+            && let Some(answer) = crate::app::settle(self.app_member_profile(&nick).await)
+        {
+            return answer;
+        }
         let path = routes::user(&nick);
         let (_, html) = self.t.get(&path, cached.then_some(LISTING_TTL), !cached, false).await.map_err(|e| Self::member_not_found(e, &nick))?;
         parse::parse_member_profile(&html, &self.t.absolute(&path))
@@ -174,6 +183,11 @@ impl ParfumoClient {
         if list.is_empty() || !list.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
             return Err(ClientError::InvalidInput("unknown collection list: use the `id` of a list returned by parfumo_get_user".into()));
         }
+        if self.has_app_session()
+            && let Some(answer) = crate::app::settle(self.app_member_collection(&nick, list).await)
+        {
+            return answer;
+        }
         let not_found = |e| match e {
             ClientError::NotFound(_) => ClientError::NotFound(format!("collection '{list}' of member '{nick}'")),
             other => other,
@@ -198,6 +212,10 @@ impl ParfumoClient {
 
     /// Fills name, brand and link of one collection entry (one request per entry).
     pub async fn resolve_collection_item(&self, item: &mut MemberCollectionItem) -> Result<(), ClientError> {
+        // An entry read through the application interface carries them already, and no entry id to ask with.
+        if item.perfume_id.is_some() {
+            return Ok(());
+        }
         let form = vec![("id".to_string(), item.entry_id.to_string())];
         let body = self.t.post_fragment(routes::WARDROBE_SNEAK_PEEK, &form, true, Some(LISTING_TTL)).await?;
         if body.trim().is_empty() {

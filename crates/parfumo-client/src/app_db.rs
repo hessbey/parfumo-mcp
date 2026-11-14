@@ -94,7 +94,7 @@ const CLASS_GROUPS: [&str; 4] = ["Type", "Season", "Occasion", "Audience & Style
 const SCALES: [(&str, &str); 5] = [("scent", ""), ("durability", "_dur"), ("sillage", "_sillage"), ("bottle", "_bottle"), ("pricing", "_pricing")];
 
 impl ParfumoClient {
-    fn remember_perfume(&self, id: &str, p_id: u64) {
+    pub(crate) fn remember_perfume(&self, id: &str, p_id: u64) {
         self.t.perfume_ids.lock().unwrap_or_else(|e| e.into_inner()).insert(id.to_lowercase(), (p_id, id.to_string()));
     }
 

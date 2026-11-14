@@ -1,0 +1,35 @@
+{
+  "user": {
+    "id": 1002,
+    "nick_name": "member1",
+    "photo": "https://media.parfumo.com/user_photo/placeholder.jpg",
+    "cover": "",
+    "gender": "m",
+    "country_id": 2,
+    "country": "Germany",
+    "country_code": "DE",
+    "reg_date": 1767268800,
+    "scores": 275,
+    "followers": "0",
+    "following": "0",
+    "is_own": 0,
+    "is_following": 0,
+    "can_message": 1,
+    "wearing": null,
+    "stats": {
+      "reviews": 0,
+      "statements": 0,
+      "photos": 0
+    },
+    "collection": {
+      "have": 0,
+      "had": 0,
+      "want": 0,
+      "tested": 0,
+      "memo": 0,
+      "filling": 0,
+      "mini": 0
+    },
+    "lists": []
+  }
+}
