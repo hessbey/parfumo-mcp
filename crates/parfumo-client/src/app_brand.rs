@@ -5,13 +5,18 @@ use serde_json::Value;
 
 use crate::{
     ClientError, ParfumoClient,
-    app_db::{brand_by_slug, count, matches, text},
+    app_db::{brand_by_slug, count, matches, remember, text},
     models::{BrandPage, EntityRef, Listing},
     site::routes,
 };
 
 /// Rows asked per page: what the application asks, and the size of a page of the web site.
 const PER_PAGE: u32 = 20;
+/// References remembered at most: they are whatever the caller typed, and a server runs
+/// for weeks. Past this the memory is emptied and filled again.
+const MAX_BRANDS: usize = 1_000;
+/// A reference longer than any name or slug of a brand is looked up each time it comes.
+const MAX_KEY_BYTES: usize = 200;
 
 fn pair(k: &str, v: impl ToString) -> (String, String) {
     (k.to_string(), v.to_string())
@@ -25,7 +30,9 @@ fn memo_key(address: bool, slug: &str) -> String {
 
 impl ParfumoClient {
     fn remember_brand(&self, key: String, number: Option<u64>) {
-        self.t.brand_ids.lock().unwrap_or_else(|e| e.into_inner()).insert(key, number);
+        if key.len() <= MAX_KEY_BYTES {
+            remember(&mut self.t.brand_ids.lock().unwrap_or_else(|e| e.into_inner()), MAX_BRANDS, key, number);
+        }
     }
 
     /// The number of a brand from a reference, understood as the web code does: a Parfumo
@@ -112,5 +119,26 @@ impl ParfumoClient {
                 total_items: u32::try_from(total).ok(),
             },
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MAX_BRANDS, MAX_KEY_BYTES, memo_key};
+    use crate::{ClientConfig, GlobalLimiter, ParfumoClient};
+
+    #[test]
+    fn the_memory_of_brands_is_bounded_in_entries_and_in_the_length_of_a_reference() {
+        let c = ParfumoClient::new(ClientConfig::default(), GlobalLimiter::new(0), None).unwrap();
+        // References are whatever a caller types: one new reference a second, for weeks.
+        for n in 0..(MAX_BRANDS + 10) {
+            c.remember_brand(memo_key(false, &format!("no such brand {n}")), None);
+        }
+        c.remember_brand(memo_key(true, "Creed"), Some(253));
+        c.remember_brand(memo_key(false, &"x".repeat(MAX_KEY_BYTES + 1)), None);
+        let known = c.t.brand_ids.lock().unwrap();
+        assert!(known.len() <= MAX_BRANDS, "{} references remembered", known.len());
+        assert_eq!(known.get("/Creed"), Some(&Some(253)), "what was looked up last is known");
+        assert!(known.keys().all(|key| key.len() <= MAX_KEY_BYTES), "an over-long reference is not kept");
     }
 }

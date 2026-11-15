@@ -7,6 +7,8 @@
 //! and statements are never read here: the interface gives one rating where the web page
 //! gives five, a relative date and no total.
 
+use std::{collections::HashMap, hash::Hash};
+
 use serde_json::Value;
 
 use crate::{
@@ -21,6 +23,9 @@ const PER_PAGE: u32 = 20;
 /// web search (measured: the same perfumes in the same order, for words and for a brand).
 /// Without an order the interface lists by name.
 const DEFAULT_ORDER: &str = "nr_desc";
+/// Perfumes whose number is remembered at most. A server runs for weeks and every page of
+/// a listing brings twenty of them: past this the memory is emptied and filled again.
+const MAX_PERFUMES: usize = 5_000;
 
 fn pair(k: &str, v: impl ToString) -> (String, String) {
     (k.to_string(), v.to_string())
@@ -92,6 +97,15 @@ fn plain_text(v: &Value, key: &str) -> Option<String> {
 pub(crate) fn refused(answer: &Value) -> bool {
     let error = answer.get("error").is_some_and(|e| !matches!(e, Value::Null | Value::Bool(false)) && e.as_str() != Some(""));
     error || text(answer, "status").as_deref() == Some("error")
+}
+
+/// Adds to a memory of identifiers that must stay bounded: once full it is emptied, and
+/// what is needed again is looked up again.
+pub(crate) fn remember<K: Eq + Hash, V>(memory: &mut HashMap<K, V>, cap: usize, key: K, value: V) {
+    if memory.len() >= cap && !memory.contains_key(&key) {
+        memory.clear();
+    }
+    memory.insert(key, value);
 }
 
 /// The names of a list of notes (`[{id, name, …}]`), without the empty placeholders.
@@ -194,8 +208,13 @@ fn pole_shares(chart: &Value, poles: Option<&Value>, warnings: &mut Vec<String>)
 }
 
 impl ParfumoClient {
+    /// Remembers the number of a perfume under its `Brand/Perfume` id. One id per number:
+    /// a perfume renamed on the site is met again under its new slug, and the old one must
+    /// not be handed out any more.
     fn remember_perfume(&self, id: &str, p_id: u64) {
-        self.t.perfume_ids.lock().unwrap_or_else(|e| e.into_inner()).insert(id.to_lowercase(), (p_id, id.to_string()));
+        let mut known = self.t.perfume_ids.lock().unwrap_or_else(|e| e.into_inner());
+        known.retain(|_, (number, _)| *number != p_id);
+        remember(&mut known, MAX_PERFUMES, id.to_lowercase(), (p_id, id.to_string()));
     }
 
     /// A read of the interface, or `None` when it has nothing to say: an address it answers
@@ -474,12 +493,55 @@ impl ParfumoClient {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use serde_json::{Value, json};
 
+    use super::{MAX_PERFUMES, remember};
     use crate::{ClientConfig, GlobalLimiter, ParfumoClient};
 
     fn client() -> ParfumoClient {
         ParfumoClient::new(ClientConfig::default(), GlobalLimiter::new(0), None).unwrap()
+    }
+
+    fn remembered(c: &ParfumoClient) -> Vec<(u64, String)> {
+        let mut all: Vec<(u64, String)> = c.t.perfume_ids.lock().unwrap().values().cloned().collect();
+        all.sort();
+        all
+    }
+
+    #[test]
+    fn a_renamed_perfume_is_only_remembered_under_its_new_address() {
+        let c = client();
+        c.remember_perfume("Creed/Acier_Aluminium", 7);
+        c.remember_perfume("Creed/aventus", 9438);
+        // The same number comes back under another slug: the site renamed the perfume.
+        c.remember_perfume("Creed/acier-aluminium", 7);
+        assert_eq!(remembered(&c), [(7, "Creed/acier-aluminium".to_string()), (9438, "Creed/aventus".to_string())]);
+        assert!(!c.t.perfume_ids.lock().unwrap().contains_key("creed/acier_aluminium"), "the old address names nothing any more");
+    }
+
+    #[test]
+    fn the_memory_of_perfumes_is_bounded() {
+        let c = client();
+        for p_id in 1..=(MAX_PERFUMES as u64 + 10) {
+            c.remember_perfume(&format!("Brand/perfume-{p_id}"), p_id);
+        }
+        let known = c.t.perfume_ids.lock().unwrap();
+        assert!(known.len() <= MAX_PERFUMES, "{} perfumes remembered", known.len());
+        assert!(known.contains_key(&format!("brand/perfume-{}", MAX_PERFUMES + 10)), "what was met last is known");
+    }
+
+    #[test]
+    fn a_full_memory_is_emptied_and_a_known_key_is_only_replaced() {
+        let mut memory = HashMap::new();
+        for n in 0..3 {
+            remember(&mut memory, 3, n, n);
+        }
+        remember(&mut memory, 3, 1, 10);
+        assert_eq!((memory.len(), memory[&1]), (3, 10), "a key already there takes no room");
+        remember(&mut memory, 3, 4, 4);
+        assert_eq!(memory.into_iter().collect::<Vec<_>>(), [(4, 4)]);
     }
 
     /// The rows of the recorded `GET /search?filter=creed` name the perfume and its

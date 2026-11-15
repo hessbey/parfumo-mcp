@@ -259,8 +259,12 @@ pub(crate) struct Transport {
     csrf: Mutex<Option<String>>,
     /// Nickname of the logged-in member, memoised with the session (see `forget_csrf`).
     pub(crate) nick: Mutex<Option<String>>,
-    /// Number and `Brand/Perfume` id of the perfumes met in listings, by lower-case id:
-    /// the application interface only knows perfumes by number.
+    // The three memories below hold identifiers only (a name and the number the application
+    // interface knows it by), never a part of an answer. Each is bounded where it is filled:
+    // a server runs for weeks.
+    /// Number and `Brand/Perfume` id of the perfumes met in listings and records, by
+    /// lower-case id: the application interface only knows perfumes by number. One id per
+    /// number, the one the site gave last: a renamed perfume loses its old address.
     pub(crate) perfume_ids: Mutex<std::collections::HashMap<String, (u64, String)>>,
     /// Number of the brands already looked up, by reference; `None` for a reference the
     /// search of the application does not know. A listing is read page after page: its
