@@ -172,15 +172,17 @@ fn pie_shares(chart: &Value) -> Vec<ClassShare> {
 /// share over the four poles and leaves the weakest out: its share is what the three
 /// others leave of 100. A pair that cannot be rebuilt is left out and named in `warnings`.
 fn pole_shares(chart: &Value, poles: Option<&Value>, warnings: &mut Vec<String>) -> Vec<ClassShare> {
-    let slices: Vec<(u64, f64)> =
-        by_position(chart).into_iter().filter_map(|(_, s)| Some((count(s, "ct")?, number(s, "p").filter(|p| *p >= 0.0)?))).collect();
-    if slices.is_empty() {
+    let entries = by_position(chart);
+    // Nobody voted: there is no chart, and nothing to tell.
+    if entries.is_empty() {
         return Vec::new();
     }
+    let slices: Vec<(u64, f64)> = entries.iter().filter_map(|(_, s)| Some((count(s, "ct")?, number(s, "p").filter(|p| *p >= 0.0)?))).collect();
     let listed = |ct: u64| slices.iter().find(|(pole, _)| *pole == ct).map(|(_, p)| *p);
     let known = || POLE_PAIRS.iter().flatten().map(|(ct, _)| *ct);
-    // The share of a pole this code does not know would be taken for the missing one's.
-    let trusted = slices.iter().all(|(ct, _)| known().any(|pole| pole == *ct));
+    // An entry without its share, or the share of a pole this code does not know, would
+    // be taken for the missing pole's.
+    let trusted = slices.len() == entries.len() && slices.iter().all(|(ct, _)| known().any(|pole| pole == *ct));
     let missing: Vec<u64> = known().filter(|ct| listed(*ct).is_none()).collect();
     let restored = match missing.as_slice() {
         [only] => Some((*only, (100.0 - slices.iter().map(|(_, p)| p).sum::<f64>()).max(0.0))),

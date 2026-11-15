@@ -337,7 +337,7 @@ async fn a_perfume_record_is_read_by_number_with_the_parts_of_the_web_record() {
     assert_eq!(p.url, format!("{}/Perfumes/Creed/aventus", c.base_url()));
     assert!(p.image_url.is_some());
     // The rank label of the web page is not in the answer of the interface: it stays
-    // absent, and the record of this perfume has no German-only fact to leave out.
+    // absent, without a warning. The recorded perfume has no facts.
     assert_eq!((p.ranking, p.facts), (None, None));
     assert!(p.warnings.is_empty(), "{:?}", p.warnings);
 }
@@ -425,6 +425,30 @@ async fn a_pair_of_audience_and_style_that_cannot_be_rebuilt_is_left_out_and_tol
     site.records.lock().unwrap().insert(3, record(|r| r["c"] = json!([[], [], [], []])));
     let p = c.get_perfume("3").await.unwrap();
     assert!(p.classification.is_empty() && p.accords.is_empty() && p.warnings.is_empty(), "{:?}", p.warnings);
+
+    // The four poles listed: nothing to restore, the same two pairs.
+    site.records.lock().unwrap().insert(
+        4,
+        record(|r| {
+            let listed: f64 = r["c"][3].as_array().unwrap().iter().map(|s| s["p"].as_str().unwrap().parse::<f64>().unwrap()).sum();
+            r["c"][3].as_array_mut().unwrap().push(json!({"ct": 1, "n": "Feminine", "v": "131", "p": format!("{}", 100.0 - listed)}));
+        }),
+    );
+    let p = c.get_perfume("4").await.unwrap();
+    assert_eq!(shares(&p, "Audience & Style"), [("Masculine", 93.6), ("Feminine", 6.4), ("Modern", 55.7), ("Classic", 44.3)]);
+    assert!(p.warnings.is_empty(), "{:?}", p.warnings);
+
+    // A pole listed without its share: what is left of 100 is not the share of the missing
+    // one, and nothing is made of the chart.
+    site.records.lock().unwrap().insert(
+        5,
+        record(|r| {
+            r["c"][3][0].as_object_mut().unwrap().remove("p");
+        }),
+    );
+    let p = c.get_perfume("5").await.unwrap();
+    assert!(p.classification.iter().all(|g| g.group != "Audience & Style"), "{:?}", p.classification);
+    assert_eq!(p.warnings.len(), 2, "{:?}", p.warnings);
 }
 
 #[tokio::test]
