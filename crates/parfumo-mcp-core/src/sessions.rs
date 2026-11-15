@@ -135,6 +135,8 @@ pub struct Sessions {
     /// When the session of the application interface of a user was last renewed, that is
     /// obtained again after the site had ended it. One renewal is allowed; a session lost
     /// again within [`LOGIN_BACKOFF`] of it is not asked for until that time is over.
+    /// The link records the same (`app_ended`, `app_renewed_at`) for the next process: a
+    /// restart is not a way round the pause.
     app_renewed: Mutex<HashMap<i64, std::time::Instant>>,
     /// The `rev` of the link each in-memory session belongs to. Another process may link
     /// a different account (`parfumo-mcp login` next to a running stdio server): the
@@ -144,6 +146,11 @@ pub struct Sessions {
     /// is kept in memory for it: the client of an account and the `rev` it belongs to
     /// always change as one. It is taken before any other lock of this struct.
     link_revs: Mutex<HashMap<i64, String>>,
+    /// Tests only: run once at the instant a login to the application interface leaves,
+    /// after everything that allows it was checked. A link that changes at that very
+    /// instant cannot be arranged from outside.
+    #[cfg(test)]
+    as_the_app_login_leaves: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
 fn aad(user_id: i64, kind: &str) -> String {
@@ -168,6 +175,8 @@ impl Sessions {
             app_backoff: Mutex::new(HashMap::new()),
             app_renewed: Mutex::new(HashMap::new()),
             link_revs: Mutex::new(HashMap::new()),
+            #[cfg(test)]
+            as_the_app_login_leaves: Mutex::new(None),
         }
     }
 
@@ -501,6 +510,17 @@ impl Sessions {
         paused
     }
 
+    /// What is left of [`LOGIN_BACKOFF`] since the session of the application interface of
+    /// `user_id` was last renewed, when it was renewed that recently: by this process, or
+    /// else by an earlier one, as `link` records it.
+    fn app_renewed_recently(&self, user_id: i64, link: &crate::db::LinkRow) -> Option<Duration> {
+        let here = self.app_renewed.lock().unwrap_or_else(|p| p.into_inner()).get(&user_id).map(|at| at.elapsed());
+        // The time of an earlier process is that of the clock. One that lies in the future
+        // (the clock was set back since) tells nothing, and holds nothing up.
+        let recorded = || link.app_renewed_at.and_then(|at| u64::try_from(crate::db::now() - at).ok()).map(Duration::from_secs);
+        LOGIN_BACKOFF.checked_sub(here.or_else(recorded)?).filter(|left| !left.is_zero())
+    }
+
     /// Credentials mode: logs in to the application interface when the user holds no
     /// session of it (the site ended it, or it was never obtained), unless something says
     /// not to. Without a session the tools read the web pages, which is no reason to insist:
@@ -510,7 +530,8 @@ impl Sessions {
     ///   linked again (recorded on the link: it holds across a restart);
     /// - any other failure is followed by a pause;
     /// - a session the site ended is renewed once; if the renewed one is lost again within
-    ///   the pause, no login until the pause is over;
+    ///   the pause, no login until the pause is over (recorded on the link as well: a new
+    ///   process does not start with a renewal of its own);
     /// - no login while the web site is waiting for a human, or for its own pause to end:
     ///   the same credentials would be sent where they were just not accepted;
     /// - nothing is sent while the site blocks the address.
@@ -529,30 +550,47 @@ impl Sessions {
             return;
         }
         let Ok(Some(link)) = self.db.link_get(user_id) else { return };
-        if link.rev != rev || !self.follows(user_id, rev) || !app_login_possible(&link) {
+        // Whether the link is still the user's, and where the session of the user stands,
+        // are read as one step, under the lock a link is replaced or erased under. A link
+        // that changes after this instant drops the session, and the login below, decided
+        // before that, then keeps no token: not even when the link changes in the short
+        // time before the login starts.
+        let generation = {
+            let revs = self.revs();
+            if revs.get(&user_id).is_none_or(|current| current != rev) {
+                return;
+            }
+            client.app_session_generation()
+        };
+        if link.rev != rev || !app_login_possible(&link) {
             return;
         }
         let Some(secret) = &link.secret else { return };
         let now = std::time::Instant::now();
-        let renewal = client.app_session_ended();
-        if renewal {
-            let renewed = self.app_renewed.lock().unwrap_or_else(|p| p.into_inner()).get(&user_id).copied();
-            if let Some(at) = renewed.filter(|at| now.duration_since(*at) < LOGIN_BACKOFF) {
-                // Renewed a moment ago, and lost again: a login accepted and a token refused,
-                // call after call, is what gets an address blocked.
-                tracing::warn!("the renewed session of the application interface was refused: the web pages are used for a while");
-                self.app_backoff.lock().unwrap_or_else(|p| p.into_inner()).insert(user_id, at + LOGIN_BACKOFF);
-                return;
-            }
+        // The site ended the session: as this process saw, or as an earlier one recorded.
+        let renewal = client.app_session_ended() || link.app_ended;
+        if renewal && let Some(left) = self.app_renewed_recently(user_id, &link) {
+            // Renewed a moment ago, and lost again: a login accepted and a token refused,
+            // call after call, is what gets an address blocked.
+            tracing::warn!("the renewed session of the application interface was refused: the web pages are used for a while");
+            self.app_backoff.lock().unwrap_or_else(|p| p.into_inner()).insert(user_id, now + left);
+            return;
         }
         let creds = self.key.decrypt(secret, &aad(user_id, "credentials")).ok().and_then(|plain| serde_json::from_slice::<Credentials>(&plain).ok());
         let Some(creds) = creds else {
             tracing::warn!("the stored credentials cannot be read: no login to the application interface");
             return;
         };
-        let outcome = client.app_login(&creds.username, &creds.password).await;
-        // The account was linked again while the login was under way: its outcome says
-        // nothing of the new link, and the client did not keep the token.
+        #[cfg(test)]
+        {
+            let hook = self.as_the_app_login_leaves.lock().unwrap().take();
+            if let Some(hook) = hook {
+                hook();
+            }
+        }
+        let outcome = client.app_login_since(&creds.username, &creds.password, generation).await;
+        // The link changed or went since the login was decided: the session was dropped
+        // with it, so the login kept no token, and its outcome says nothing of the new link.
         if !self.follows(user_id, rev) {
             return;
         }
@@ -560,6 +598,10 @@ impl Sessions {
             Ok(()) => {
                 if renewal {
                     self.app_renewed.lock().unwrap_or_else(|p| p.into_inner()).insert(user_id, now);
+                    if let Err(e) = self.db.link_set_app_renewed(user_id, rev, Some(crate::db::now())) {
+                        // This process still knows; the next one would allow one renewal more.
+                        tracing::warn!(error = %e, "the renewal of the session of the application interface could not be recorded");
+                    }
                 }
                 self.store_app_session(user_id);
             }
@@ -611,7 +653,11 @@ impl Sessions {
         let revs = self.revs();
         let account = self.clients.lock().unwrap_or_else(|p| p.into_inner()).get(&user_id).cloned();
         let (Some(rev), Some(account)) = (revs.get(&user_id), account) else { return };
-        let stored = self.encrypt_cookies(user_id, &account).and_then(|cookies| self.db.link_store_cookies(user_id, rev, &cookies).map_err(internal));
+        // With the token goes what became of it: a session the site ended is one the next
+        // process must know it renews, not obtains for the first time.
+        let stored = self
+            .encrypt_cookies(user_id, &account)
+            .and_then(|cookies| self.db.link_store_app_session(user_id, rev, &cookies, account.app_session_ended()).map_err(internal));
         if let Err(e) = stored {
             tracing::warn!(error = %e, "the session of the application interface could not be stored");
             // Tried again when the next call ends.
@@ -626,13 +672,23 @@ impl Sessions {
         StoreAppSession { sessions: self, user_id }
     }
 
+    /// What `hook` does happens at the instant the next login to the application interface
+    /// leaves: after the link was checked, before the request.
+    #[cfg(test)]
+    pub(crate) fn as_the_app_login_leaves(&self, hook: impl FnOnce() + Send + 'static) {
+        *self.as_the_app_login_leaves.lock().unwrap() = Some(Box::new(hook));
+    }
+
     /// Ends the pauses of the login to the application interface: the one that follows a
-    /// failed login, and the one that follows a renewed session lost at once (tests: time
-    /// cannot be advanced).
+    /// failed login, and the one that follows a renewed session lost at once, for this
+    /// process and for the next (tests: time cannot be advanced).
     #[cfg(any(test, feature = "test-util"))]
     pub fn end_app_backoff(&self, user_id: i64) {
         self.app_backoff.lock().unwrap_or_else(|p| p.into_inner()).remove(&user_id);
         self.app_renewed.lock().unwrap_or_else(|p| p.into_inner()).remove(&user_id);
+        if let Ok(Some(link)) = self.db.link_get(user_id) {
+            let _ = self.db.link_set_app_renewed(user_id, &link.rev, None);
+        }
     }
 }
 

@@ -15,6 +15,7 @@ use crate::{
     config::Config,
     crypto::MasterKey,
     db::{Db, User},
+    sessions::{Credentials, LocalAccount},
     state::AppState,
     testing::{
         TestApp, error_code, link_account, linked, ok,
@@ -493,12 +494,15 @@ async fn a_token_the_site_refused_does_not_come_back_from_the_database() {
     assert_eq!(p.search().await, FROM_THE_INTERFACE);
     assert_eq!(asked(site).1, [login(), call("/perfumes", "app-alice-2")], "the refused token was stored, and sent again after the restart");
 
-    // Refused to a tool that takes the account client itself, as the session status does.
+    // Much later (a session renewed and lost at once is not renewed again, restart or not:
+    // that rule has its own tests), refused to a tool that takes the account client
+    // itself, as the session status does.
     site.app_live.lock().unwrap().clear();
     let account = p.state.sessions.account_client(w.user).await.unwrap();
     assert_eq!(account.own_nick().await.unwrap(), "alice");
     let _ = p.tools.finish(&p.user, "parfumo_session_status", "session", std::time::Instant::now(), 0, Ok((String::new(), json!({}))));
-    asked(site);
+    assert_eq!(asked(site).1, [call("/auth/me", "app-alice-2")]);
+    p.state.sessions.end_app_backoff(w.user);
     let p = w.start();
     assert_eq!(p.search().await, FROM_THE_INTERFACE);
     assert_eq!(asked(site).1, [login(), call("/perfumes", "app-alice-3")]);
@@ -513,6 +517,7 @@ async fn a_token_the_site_refused_does_not_come_back_from_the_database() {
     });
     assert!(tokio::time::timeout(Duration::from_millis(300), abandoned).await.is_err(), "the call never ends: it is dropped");
     assert_eq!(asked(site).1, [call("/auth/me", "app-alice-3")]);
+    p.state.sessions.end_app_backoff(w.user);
     assert_eq!(w.start().search().await, FROM_THE_INTERFACE);
     assert_eq!(asked(site).1, [login(), call("/perfumes", "app-alice-4")]);
 }
@@ -554,6 +559,123 @@ async fn a_login_under_way_when_another_account_is_linked_leaves_nothing_in_the_
     let (_, interface) = asked(site);
     assert!(!interface.is_empty() && interface.iter().all(|(_, token)| token.starts_with("app-bob-")), "{interface:?}");
     assert_eq!(logins(site).0, 2, "the stored web session is bob's: no new web login after the restart");
+}
+
+#[tokio::test]
+async fn a_link_that_changes_at_the_instant_a_login_leaves_keeps_nothing_of_the_previous_account() {
+    let w = World::new().await;
+    let (site, user) = (&w.site, w.user);
+    let p = w.start();
+    // alice is linked, and the site ended her session: the next read logs in again.
+    let lose_the_session = || async {
+        p.link_to("alice").await;
+        site.app_live.lock().unwrap().clear();
+        assert_eq!(p.search().await, FROM_THE_WEB);
+        asked(site);
+    };
+
+    // The user unlinks the account at the very instant that login leaves: the link was
+    // checked, the request is not sent yet.
+    lose_the_session().await;
+    let sessions = p.state.sessions.clone();
+    p.state.sessions.as_the_app_login_leaves(move || assert!(sessions.unlink(user).unwrap()));
+    assert_eq!(p.search().await, FROM_THE_WEB, "the read used the token of an account that is no longer linked");
+    assert_eq!(asked(site).1, [login()], "the login had left: the site issued a token");
+    assert!(!p.holds_session(), "the token of an unlinked account is held until the process ends");
+    assert_eq!(p.search().await, FROM_THE_WEB);
+    assert_eq!(asked(site).1, []);
+
+    // The same when another account is linked at that instant: the token alice's login
+    // obtains is not kept under bob's link.
+    lose_the_session().await;
+    let sessions = p.state.sessions.clone();
+    p.state.sessions.as_the_app_login_leaves(move || {
+        let bob = LocalAccount::Credentials(Credentials { username: "bob".into(), password: "pw-bob".into() });
+        assert!(sessions.sync_local_link(user, Some(&bob)).unwrap());
+    });
+    assert_eq!(p.search().await, FROM_THE_WEB, "the read used alice's token under bob's link");
+    assert_eq!(asked(site).1, [login()]);
+    assert!(!p.holds_session());
+    // bob's link logs in for itself, and what the clients and the database hold is bob's.
+    assert_eq!(p.search().await, FROM_THE_INTERFACE);
+    assert_eq!(p.own_nick().await, "bob");
+    let restarted = w.start();
+    assert_eq!(restarted.search().await, FROM_THE_INTERFACE);
+    let (_, interface) = asked(site);
+    assert_eq!(interface[0], login());
+    assert!(interface.len() > 2 && interface[1..].iter().all(|(_, token)| token.starts_with("app-bob-")), "{interface:?}");
+    assert!(site.app_calls.lock().unwrap().iter().rev().take(interface.len() - 1).all(|(member, _)| member == "bob"));
+}
+
+#[tokio::test]
+async fn a_restart_does_not_forget_that_a_renewed_session_was_lost() {
+    let w = World::new().await;
+    let site = &w.site;
+    let p = w.start();
+    p.link_to("alice").await;
+    asked(site);
+
+    // The interface accepts every login and refuses every token: one renewal, then a pause.
+    site.app_tokens_refused.store(true, Ordering::SeqCst);
+    for _ in 0..3 {
+        assert_eq!(p.search().await, FROM_THE_WEB);
+    }
+    assert_eq!(asked(site).1, [call("/perfumes", "app-alice-1"), login(), call("/perfumes", "app-alice-2")]);
+
+    // The program is started again during the pause, as the stdio server is with every
+    // session of its MCP client: no login, no refused request, for the tools of either kind.
+    let p = w.start();
+    for _ in 0..3 {
+        assert_eq!(p.search().await, FROM_THE_WEB);
+    }
+    assert_eq!(p.own_nick().await, "alice");
+    assert_eq!(asked(site).1, [], "a new start logged in again, and had a token refused, during the pause of the previous one");
+
+    // Started again once the pause is over: the site had ended the session, so this login
+    // is a renewal too. One, and when its session is lost as well, a pause.
+    p.state.sessions.end_app_backoff(w.user);
+    let p = w.start();
+    for _ in 0..3 {
+        assert_eq!(p.search().await, FROM_THE_WEB);
+    }
+    assert_eq!(asked(site).1, [login(), call("/perfumes", "app-alice-3")], "two logins and two refusals at every start");
+    assert_eq!(w.start().search().await, FROM_THE_WEB);
+    assert_eq!(asked(site).1, []);
+
+    // Linking the account again starts afresh: a session, and one renewal.
+    site.app_tokens_refused.store(false, Ordering::SeqCst);
+    p.link_to("alice").await;
+    assert_eq!(w.start().search().await, FROM_THE_INTERFACE);
+    assert_eq!(asked(site).1, [login(), call("/perfumes", "app-alice-4")]);
+}
+
+#[tokio::test]
+async fn a_login_the_interface_forbids_without_refusing_the_credentials_is_followed_by_a_pause() {
+    let w = World::new().await;
+    let site = &w.site;
+    let p = w.start();
+
+    // 403 on the login: what the interface answers to a wrong password was never recorded,
+    // and this may as well be a lockout or a rule on the address. The credentials are not
+    // given up for it.
+    site.app_login_forbidden.store(true, Ordering::SeqCst);
+    p.link_to("alice").await;
+    assert_eq!(logins(site), (1, 1));
+    assert!(!w.link().app_refused, "credentials that may be good were refused for good");
+    for _ in 0..3 {
+        assert_eq!(p.search().await, FROM_THE_WEB);
+    }
+    assert_eq!(logins(site), (1, 1), "one attempt, then a pause");
+    // After the pause, or in a new process, one new attempt.
+    p.state.sessions.end_app_backoff(w.user);
+    assert_eq!(p.search().await, FROM_THE_WEB);
+    assert_eq!(w.start().search().await, FROM_THE_WEB);
+    assert_eq!(logins(site), (1, 3));
+    // The interface takes the login again: the session is obtained.
+    site.app_login_forbidden.store(false, Ordering::SeqCst);
+    p.state.sessions.end_app_backoff(w.user);
+    assert_eq!(p.search().await, FROM_THE_INTERFACE);
+    assert_eq!(logins(site), (1, 4));
 }
 
 #[tokio::test]

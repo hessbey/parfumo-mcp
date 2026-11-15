@@ -53,7 +53,13 @@ CREATE TABLE IF NOT EXISTS parfumo_links (
     from_env      INTEGER NOT NULL DEFAULT 0,
     -- The application interface refused these credentials: they are not sent to it again
     -- until the account is linked again.
-    app_refused   INTEGER NOT NULL DEFAULT 0
+    app_refused   INTEGER NOT NULL DEFAULT 0,
+    -- The site ended the session of the application interface of this link, and none was
+    -- obtained since: the next login to it is a renewal.
+    app_ended     INTEGER NOT NULL DEFAULT 0,
+    -- When that session was last renewed (unix seconds): a renewed session lost again
+    -- shortly after is not asked for at once, by this process or the next.
+    app_renewed_at INTEGER
 );
 CREATE TABLE IF NOT EXISTS oauth_clients (
     client_id     TEXT PRIMARY KEY,
@@ -164,6 +170,11 @@ pub struct LinkRow {
     /// The application interface refused the credentials of this link: only linking the
     /// account again clears it.
     pub app_refused: bool,
+    /// The site ended the session of the application interface of this link, and none was
+    /// obtained since.
+    pub app_ended: bool,
+    /// When that session was last renewed, in unix seconds.
+    pub app_renewed_at: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -263,10 +274,14 @@ impl Db {
             )?;
         }
         // Databases created before the application interface was used do not say whether it
-        // refused the credentials of a link.
-        let has_app_refused = conn.prepare("SELECT 1 FROM pragma_table_info('parfumo_links') WHERE name = 'app_refused'")?.exists([])?;
-        if !has_app_refused {
-            conn.execute_batch("ALTER TABLE parfumo_links ADD COLUMN app_refused INTEGER NOT NULL DEFAULT 0")?;
+        // refused the credentials of a link, nor what became of its session.
+        for (column, definition) in
+            [("app_refused", "INTEGER NOT NULL DEFAULT 0"), ("app_ended", "INTEGER NOT NULL DEFAULT 0"), ("app_renewed_at", "INTEGER")]
+        {
+            let has_column = conn.prepare("SELECT 1 FROM pragma_table_info('parfumo_links') WHERE name = ?1")?.exists([column])?;
+            if !has_column {
+                conn.execute_batch(&format!("ALTER TABLE parfumo_links ADD COLUMN {column} {definition}"))?;
+            }
         }
         Ok(Self(Arc::new(Mutex::new(conn))))
     }
@@ -395,7 +410,8 @@ impl Db {
         Ok(self
             .conn()
             .query_row(
-                "SELECT mode, secret, cookies, status, linked_at, last_login_at, rev, from_env, app_refused FROM parfumo_links WHERE user_id = ?1",
+                "SELECT mode, secret, cookies, status, linked_at, last_login_at, rev, from_env, app_refused, app_ended, app_renewed_at \
+                 FROM parfumo_links WHERE user_id = ?1",
                 [user_id],
                 |r| {
                     Ok(LinkRow {
@@ -408,6 +424,8 @@ impl Db {
                         rev: r.get(6)?,
                         from_env: r.get(7)?,
                         app_refused: r.get(8)?,
+                        app_ended: r.get(9)?,
+                        app_renewed_at: r.get(10)?,
                     })
                 },
             )
@@ -416,13 +434,14 @@ impl Db {
 
     /// Stores the link of a user, replacing any earlier one, and returns its new `rev`.
     /// Whatever was held against the earlier link (where it came from, a refusal of its
-    /// credentials by the application interface) goes with it.
+    /// credentials by the application interface, what became of its session there) goes
+    /// with it.
     pub fn link_put(&self, user_id: i64, mode: &str, secret: Option<&[u8]>, cookies: Option<&[u8]>, status: &str) -> Result<String, DbError> {
         let rev = crate::crypto::new_secret("");
         self.conn().execute(
             "INSERT INTO parfumo_links (user_id, mode, secret, cookies, status, linked_at, rev) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
              ON CONFLICT(user_id) DO UPDATE SET mode = ?2, secret = ?3, cookies = ?4, status = ?5, linked_at = ?6, rev = ?7, \
-             last_login_at = NULL, from_env = 0, app_refused = 0",
+             last_login_at = NULL, from_env = 0, app_refused = 0, app_ended = 0, app_renewed_at = NULL",
             params![user_id, mode, secret, cookies, status, now(), rev],
         )?;
         Ok(rev)
@@ -446,11 +465,23 @@ impl Db {
         Ok(rows > 0)
     }
 
-    /// Stores the cookies of the link `rev` (the session token of the application interface
-    /// is one of them), leaving its status alone. `false`, and nothing written, when the
-    /// user's link is no longer that one.
-    pub fn link_store_cookies(&self, user_id: i64, rev: &str, cookies: &[u8]) -> Result<bool, DbError> {
-        Ok(self.conn().execute("UPDATE parfumo_links SET cookies = ?3 WHERE user_id = ?1 AND rev = ?2", params![user_id, rev, cookies])? > 0)
+    /// Stores the session of the application interface of the link `rev`: the cookies (its
+    /// token is one of them) and whether the site ended it (`ended`: no token is then held,
+    /// and the next login renews the session). The status of the link is left alone.
+    /// `false`, and nothing written, when the user's link is no longer that one.
+    pub fn link_store_app_session(&self, user_id: i64, rev: &str, cookies: &[u8], ended: bool) -> Result<bool, DbError> {
+        let rows = self.conn().execute(
+            "UPDATE parfumo_links SET cookies = ?3, app_ended = ?4 WHERE user_id = ?1 AND rev = ?2",
+            params![user_id, rev, cookies, ended],
+        )?;
+        Ok(rows > 0)
+    }
+
+    /// Records when the session of the application interface of the link `rev` was last
+    /// renewed (`None`: forgotten). `false`, and nothing written, when the user's link is
+    /// no longer that one.
+    pub fn link_set_app_renewed(&self, user_id: i64, rev: &str, at: Option<i64>) -> Result<bool, DbError> {
+        Ok(self.conn().execute("UPDATE parfumo_links SET app_renewed_at = ?3 WHERE user_id = ?1 AND rev = ?2", params![user_id, rev, at])? > 0)
     }
 
     /// Records that the application interface refused the credentials of the link `rev`.
@@ -881,28 +912,44 @@ mod hardening_tests {
         let db = Db::init(conn).unwrap();
         let old = db.link_get(1).unwrap().unwrap();
         assert_eq!((old.rev.as_str(), old.from_env, old.app_refused), ("rev-1", true, false), "an existing link is kept, and was not refused");
+        assert_eq!((old.app_ended, old.app_renewed_at), (false, None), "nor was its session ended or renewed");
 
-        // The refusal is recorded on the link it was met for, and on no other.
+        // The refusal is recorded on the link it was met for, and on no other. So is what
+        // became of the session of the application interface.
         assert!(!db.link_set_app_refused(1, "another-rev").unwrap());
-        assert!(!db.link_get(1).unwrap().unwrap().app_refused);
+        assert!(!db.link_set_app_renewed(1, "another-rev", Some(40)).unwrap());
+        let link = db.link_get(1).unwrap().unwrap();
+        assert_eq!((link.app_refused, link.app_renewed_at), (false, None));
         assert!(db.link_set_app_refused(1, "rev-1").unwrap());
-        assert!(db.link_get(1).unwrap().unwrap().app_refused);
-        // Opening the same database again must not fail on the existing column, and keeps it.
+        assert!(db.link_set_app_renewed(1, "rev-1", Some(40)).unwrap());
+        assert!(db.link_store_app_session(1, "rev-1", b"no token", true).unwrap());
+        // Opening the same database again must not fail on the existing columns, and keeps them.
         let db = Db::init(std::mem::replace(&mut *db.conn(), Connection::open_in_memory().unwrap())).unwrap();
-        assert!(db.link_get(1).unwrap().unwrap().app_refused, "the refusal survives a restart");
-        // Only linking the account again clears it.
+        let link = db.link_get(1).unwrap().unwrap();
+        assert_eq!((link.app_refused, link.app_ended, link.app_renewed_at), (true, true, Some(40)), "all of it survives a restart");
+        assert_eq!((link.cookies.as_deref(), link.status.as_str()), (Some(&b"no token"[..]), "linked"), "the status is left alone");
+        // A session obtained again is no longer an ended one; when it was renewed stays.
+        assert!(db.link_store_app_session(1, "rev-1", b"a token", false).unwrap());
+        let link = db.link_get(1).unwrap().unwrap();
+        assert_eq!((link.app_ended, link.app_renewed_at), (false, Some(40)));
+        assert!(db.link_store_app_session(1, "rev-1", b"no token", true).unwrap());
+        // Only linking the account again clears all of it.
         let rev = db.link_put(1, "credentials", Some(b"s"), None, "linked").unwrap();
-        assert!(!db.link_get(1).unwrap().unwrap().app_refused);
+        let link = db.link_get(1).unwrap().unwrap();
+        assert_eq!((link.app_refused, link.app_ended, link.app_renewed_at), (false, false, None));
 
         // What belongs to an earlier link is never written into the row of the new one.
-        assert!(!db.link_store_cookies(1, "rev-1", b"old").unwrap());
+        assert!(!db.link_store_app_session(1, "rev-1", b"old", true).unwrap());
         assert!(!db.link_update_session(1, "rev-1", Some(b"old"), "captcha_required", true).unwrap());
         let link = db.link_get(1).unwrap().unwrap();
-        assert_eq!((link.cookies.as_deref(), link.status.as_str(), link.last_login_at), (None, "linked", None));
-        assert!(db.link_store_cookies(1, &rev, b"new").unwrap());
+        assert_eq!((link.cookies.as_deref(), link.status.as_str(), link.last_login_at, link.app_ended), (None, "linked", None, false));
+        assert!(db.link_store_app_session(1, &rev, b"new", false).unwrap());
         assert!(db.link_update_session(1, &rev, Some(b"newer"), "linked", true).unwrap());
         let link = db.link_get(1).unwrap().unwrap();
         assert_eq!((link.cookies.as_deref(), link.last_login_at.is_some()), (Some(&b"newer"[..]), true));
+        // A time that is forgotten.
+        assert!(db.link_set_app_renewed(1, &rev, Some(50)).unwrap() && db.link_set_app_renewed(1, &rev, None).unwrap());
+        assert_eq!(db.link_get(1).unwrap().unwrap().app_renewed_at, None);
     }
 
     #[test]

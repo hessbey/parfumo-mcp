@@ -81,6 +81,9 @@ pub struct Site {
     /// When set, the login of the application interface answers 503: an outage, which says
     /// nothing of the credentials.
     pub app_login_unavailable: Arc<AtomicBool>,
+    /// When set, the login of the application interface answers 403, whatever the
+    /// credentials: an answer that does not say they are wrong.
+    pub app_login_forbidden: Arc<AtomicBool>,
     /// When set, the application interface refuses every token, also one it just issued.
     pub app_tokens_refused: Arc<AtomicBool>,
     /// When set, the site blocks the address: every request of the application interface
@@ -241,6 +244,9 @@ fn answer(site: &Site, method: Method, uri: Uri, headers: HeaderMap, body: axum:
             let count = site.app_logins.fetch_add(1, Ordering::SeqCst) + 1;
             if site.app_login_unavailable.load(Ordering::SeqCst) {
                 return json(StatusCode::SERVICE_UNAVAILABLE, "{\"error\":\"Service unavailable\"}".into());
+            }
+            if site.app_login_forbidden.load(Ordering::SeqCst) {
+                return json(StatusCode::FORBIDDEN, "{\"error\":\"Forbidden\"}".into());
             }
             let user = f("email");
             let known = site.accounts.lock().unwrap().contains_key(&user);
