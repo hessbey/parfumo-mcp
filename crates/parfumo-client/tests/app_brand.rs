@@ -364,3 +364,15 @@ async fn a_brand_whose_web_page_cannot_be_read_is_given_without_its_country_and_
     assert_eq!((b.brand.id.as_str(), b.country, b.perfumes.items.len()), ("Elsewhere", None, 5));
     assert_eq!(b.warnings, ["country unavailable: not found: /Perfumes/Elsewhere"]);
 }
+
+/// The rows of a page, for a listing read in one go after its first page: the web page,
+/// which only completes the head, is not read again.
+#[tokio::test]
+async fn the_rows_of_a_following_page_are_read_without_the_web_page() {
+    let (c, site) = logged_in().await;
+    c.get_brand("Creed", 1).await.unwrap();
+    site.take();
+    let rows = c.get_brand_rows("Creed", 2).await.unwrap();
+    assert_eq!(site.take(), ["/app/v1/brand_details?b_id=253&page=2&per_page=20&o=nr_desc&g_f=1&g_m=1&g_u=1"]);
+    assert_eq!((rows.country, rows.perfumes.items.len(), rows.warnings.len()), (None, 5, 0), "the head is the one of the first page");
+}

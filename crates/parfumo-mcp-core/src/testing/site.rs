@@ -101,6 +101,11 @@ pub struct Site {
 
 /// The page by which the site tells that it blocks an address. The page itself was never
 /// recorded: this is what docs/APP_API.md quotes of it (status 404, an HTML page).
+/// A page or an answer recorded on the real site, from the fixtures of the client.
+fn recorded(name: &str) -> String {
+    std::fs::read_to_string(format!("{}/../parfumo-client/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap()
+}
+
 pub const BLOCK_PAGE: &str = "<html><head><title>Access Denied</title></head><body><h1>Access Denied</h1><p>try again in 5 minutes</p></body></html>";
 
 impl Site {
@@ -271,6 +276,10 @@ fn answer(site: &Site, method: Method, uri: Uri, headers: HeaderMap, body: axum:
                  \"b_name\":\"Dior\",\"b_name_url\":\"Dior\",\"p_release_year\":\"2015\",\"p_gender\":\"maennlich\",\"p_total_votings\":\"100\",\"p_avg_voting\":\"80\"}]}"
                     .into(),
             ),
+            // One brand, as recorded on the real site: Creed, found by the search and
+            // listed five rows a page, whatever page is asked (104 perfumes in all).
+            "/search" => json(StatusCode::OK, recorded("app_search_creed.json")),
+            "/brand_details" => json(StatusCode::OK, recorded("app_brand_details.json")),
             _ => json(StatusCode::NOT_FOUND, "{\"error\":\"Not found\"}".into()),
         };
     }
@@ -299,16 +308,17 @@ fn answer(site: &Site, method: Method, uri: Uri, headers: HeaderMap, body: axum:
             .body(Body::empty())
             .unwrap();
     }
-    // Two public pages, as recorded on the real site: a perfume, and a search (20 results
-    // of 151, whatever is searched).
+    // Three public pages, as recorded on the real site: a perfume, a search (20 results of
+    // 151, whatever is searched), and the page of a brand (Dior's, served as the page of
+    // Creed: France, founded in 1946).
     let public_page = match path.as_str() {
         "/Perfumes/Dior/Sauvage_Eau_de_Toilette" => Some("perfume_sauvage.html"),
         "/s_perfumes_x.php" => Some("search.html"),
+        "/Perfumes/Creed" => Some("brand.html"),
         _ => None,
     };
     if let Some(name) = public_page {
-        let fixture = format!("{}/../parfumo-client/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"));
-        return Html(std::fs::read_to_string(fixture).unwrap()).into_response();
+        return Html(recorded(name)).into_response();
     }
 
     // Everything below belongs to an account.

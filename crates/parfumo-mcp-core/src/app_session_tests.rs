@@ -744,3 +744,27 @@ async fn while_the_address_is_blocked_every_read_goes_to_the_web_site_and_nothin
     assert_eq!(error_code(&blocked), "rate_limited", "{blocked}");
     assert!(blocked["content"][0]["text"].as_str().unwrap().contains("seconds before retrying"), "{blocked}");
 }
+
+/// A brand read through the application interface is completed from its web page: the
+/// country comes from there. A call that reads several pages of the listing reads that web
+/// page once, not once per page.
+#[tokio::test]
+async fn a_brand_read_through_the_interface_takes_its_country_from_the_web_page_once_a_call() {
+    let (base, site) = spawn_site().await;
+    let app = TestApp::new(&base);
+    let (_, alice_key) = linked(&app, "alice").await;
+    asked(&site);
+
+    // Eight perfumes: two pages of the interface, which the stand-in serves five rows a page.
+    let found = app.call_tool(&alice_key, "parfumo_get_brand", json!({"brand": "Creed", "limit": 8})).await;
+    let brand = ok(&found);
+    assert_eq!(brand["entity"]["id"], "Creed", "{found}");
+    assert_eq!(brand["entity"]["numeric_id"], 253, "the brand of the interface");
+    assert_eq!((brand["country"].as_str(), brand["founded"].as_u64()), (Some("France"), Some(1946)), "the head of the web page");
+    assert_eq!(brand["perfumes"].as_array().unwrap().len(), 8);
+    assert!(brand.get("warnings").is_none(), "{found}");
+    let (web, interface) = asked(&site);
+    let token = "app-alice-1";
+    assert_eq!(interface, [call("/search", token), call("/brand_details", token), call("/brand_details", token)]);
+    assert_eq!(web, ["/Perfumes/Creed"], "the web page is read once, without the token");
+}

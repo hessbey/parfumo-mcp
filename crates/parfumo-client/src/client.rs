@@ -624,14 +624,26 @@ impl ParfumoClient {
     /// Brand record and one page (20 items) of its perfumes. `r` is a URL, a path
     /// (`/Perfumes/Dior`), a slug or a brand name.
     pub async fn get_brand(&self, r: &str, page: u32) -> Result<BrandPage, ClientError> {
+        self.brand_page(r, page, true).await
+    }
+
+    /// The same page of a brand, for its rows: an answer of the application interface is
+    /// not completed from the web page, so `country` may be absent. For the pages that
+    /// follow the first one when a listing is read in one go: the head is known by then,
+    /// and the same web page is not read once per page.
+    pub async fn get_brand_rows(&self, r: &str, page: u32) -> Result<BrandPage, ClientError> {
+        self.brand_page(r, page, false).await
+    }
+
+    async fn brand_page(&self, r: &str, page: u32, head: bool) -> Result<BrandPage, ClientError> {
         // Through the application interface when a session of it is held and its search
         // knows the brand; the web page otherwise.
         if self.has_app_session()
             && let Some(answer) = crate::app::settle(self.app_get_brand(r, page).await)
         {
             return match answer {
-                Ok(brand) => Ok(self.with_brand_head(brand).await),
-                Err(e) => Err(e),
+                Ok(brand) if head => Ok(self.with_brand_head(brand).await),
+                answer => answer,
             };
         }
         let html = self.entity_page(r, routes::PERFUMES_PREFIX, routes::LIVESEARCH_BRAND, page, "brand").await?;
@@ -641,14 +653,23 @@ impl ParfumoClient {
     /// Perfumer record and one page (20 items) of their creations. `r` is a URL, a path
     /// (`/Perfumers/…`), a slug or a perfumer name.
     pub async fn get_perfumer(&self, r: &str, page: u32) -> Result<PerfumerPage, ClientError> {
+        self.perfumer_page(r, page, true).await
+    }
+
+    /// The same page of a perfumer, for its rows: see [`Self::get_brand_rows`].
+    pub async fn get_perfumer_rows(&self, r: &str, page: u32) -> Result<PerfumerPage, ClientError> {
+        self.perfumer_page(r, page, false).await
+    }
+
+    async fn perfumer_page(&self, r: &str, page: u32, head: bool) -> Result<PerfumerPage, ClientError> {
         // Through the application interface when a session of it is held, the number of
         // the perfumer is known and it has that perfumer; the web page otherwise.
         if self.has_app_session()
             && let Some(answer) = crate::app::settle(self.app_get_perfumer(r, page).await)
         {
             return match answer {
-                Ok(perfumer) => Ok(self.with_perfumer_head(perfumer).await),
-                Err(e) => Err(e),
+                Ok(perfumer) if head => Ok(self.with_perfumer_head(perfumer).await),
+                answer => answer,
             };
         }
         let html = self.entity_page(r, routes::PERFUMERS_PREFIX, routes::LIVESEARCH_PERFUMER, page, "perfumer").await?;
