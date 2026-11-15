@@ -63,6 +63,7 @@ async fn handler(State(site): State<Arc<Site>>, uri: Uri, headers: HeaderMap, _b
             }
             "/app/v1/perfumes" if asked.contains("y_0=1803&") => json(&YEAR.replace("\"matches\": 5565,", "")),
             "/app/v1/perfumes" if asked.contains("y_0=1804&") => json(r#"{"error":"Not available"}"#),
+            "/app/v1/perfumes" if asked.contains("y_0=1805&") => json(r#"{"matches":5}"#),
             "/app/v1/perfumes" if asked.contains("y_0=") => json(YEAR),
             _ => (StatusCode::NOT_FOUND, r#"{"error":"Not found"}"#).into_response(),
         };
@@ -104,10 +105,11 @@ fn names(page: &Listing<PerfumeSummary>) -> Vec<&str> {
 }
 
 #[tokio::test]
-async fn a_release_year_is_read_as_the_application_asks_it() {
+async fn a_release_year_is_read_in_the_order_of_the_web_page() {
     let (c, site) = client(true).await;
     let page = c.get_rankings(&RankingKind::Year(2020), 3).await.unwrap();
-    assert_eq!(site.asked(), ["/app/v1/perfumes?y_0=2020&page=3&per_page=20&o=nr_desc&g_f=1&g_m=1&g_u=1"], "one call, no web page");
+    // The web page of a release year lists by name: so is the interface asked.
+    assert_eq!(site.asked(), ["/app/v1/perfumes?y_0=2020&page=3&per_page=20&o=n_asc&g_f=1&g_m=1&g_u=1"], "one call, no web page");
 
     // 5565 perfumes that year; like the web site, the first 1000 are listed.
     assert_eq!((page.page, page.total_items, page.total_pages), (3, Some(5565), Some(50)));
@@ -131,9 +133,10 @@ async fn a_release_year_is_read_as_the_application_asks_it() {
     assert!(page.items.iter().all(|p| p.rank.is_none() && p.trend_count.is_none() && p.concentration.is_none()));
     assert!(page.items.iter().all(|p| p.year == Some(2020)));
 
-    // The numbers met in the listing are remembered: the record is asked at once.
+    // The numbers met in the listing are remembered: the record is asked at once. (The
+    // fake has no record: the web page is then asked, which it has not either.)
     let _ = c.get_perfume("rabanne/1-million-parfum").await;
-    assert_eq!(site.asked().last().unwrap(), "/app/v1/perfume_details/136850");
+    assert_eq!(site.asked()[1..], ["/app/v1/perfume_details/136850", "/Perfumes/rabanne/1-million-parfum"]);
 }
 
 #[tokio::test]
@@ -198,7 +201,7 @@ async fn a_year_goes_to_the_web_site_past_the_thousandth_perfume_or_without_a_se
     let last = c.get_rankings(&RankingKind::Year(2020), 50).await.unwrap();
     assert_eq!((last.items.len(), last.page, last.total_pages), (5, 50, Some(50)));
     let _ = c.get_rankings(&RankingKind::Year(2020), 51).await;
-    assert_eq!(site.asked(), ["/app/v1/perfumes?y_0=2020&page=50&per_page=20&o=nr_desc&g_f=1&g_m=1&g_u=1", "/Release_Years/2020?current_page=51"]);
+    assert_eq!(site.asked(), ["/app/v1/perfumes?y_0=2020&page=50&per_page=20&o=n_asc&g_f=1&g_m=1&g_u=1", "/Release_Years/2020?current_page=51"]);
 
     // Without a session of the application interface, nothing changes.
     let (c, site) = client(false).await;
@@ -216,16 +219,21 @@ async fn an_answer_that_departs_from_the_recorded_one_is_never_filled_in() {
     assert_eq!((page.total_items, page.total_pages), (Some(5565), Some(50)));
     assert_eq!(names(&page), ["#04 Figue Prune", "#05 Vanille Neroli", "'Cause I'm Happy", "007 pour Femme"]);
 
-    // Without a total the rows are kept and the totals stay unknown, on any page.
-    let page = c.get_rankings(&RankingKind::Year(1803), 2).await.unwrap();
-    assert_eq!((page.items.len(), page.page, page.total_items, page.total_pages), (5, 2, None, None));
+    // Without a total the listing is not as complete as the web page, which always tells
+    // how many perfumes a year has: the web page is read (the fake has none to serve).
+    assert!(c.get_rankings(&RankingKind::Year(1803), 2).await.is_err());
+    assert_eq!(site.asked()[1..], ["/app/v1/perfumes?y_0=1803&page=2&per_page=20&o=n_asc&g_f=1&g_m=1&g_u=1", "/Release_Years/1803?current_page=2"]);
 
-    // An answer that is not a listing is an error: neither an empty year, nor a silent
-    // switch to the web site.
-    let err = c.get_rankings(&RankingKind::Year(1804), 1).await.unwrap_err();
+    // A refusal in JSON under status 200 is not an empty year: the web page is read too.
+    assert!(c.get_rankings(&RankingKind::Year(1804), 1).await.is_err());
+    assert_eq!(site.asked()[3..], ["/app/v1/perfumes?y_0=1804&page=1&per_page=20&o=n_asc&g_f=1&g_m=1&g_u=1", "/Release_Years/1804"]);
+    assert!(c.has_app_session(), "neither is a refusal of the session");
+
+    // An answer of another shape that is not a refusal is an error: neither an empty
+    // year, nor a silent switch to the web site.
+    let err = c.get_rankings(&RankingKind::Year(1805), 1).await.unwrap_err();
     assert!(matches!(err, ClientError::ParserOutdated(_)), "{err:?}");
-    assert_eq!(site.asked().len(), 3);
-    assert!(site.asked().iter().all(|a| a.starts_with("/app/v1/perfumes?y_0=")), "{:?}", site.asked());
+    assert_eq!(site.asked().len(), 6);
 }
 
 #[tokio::test]
@@ -237,7 +245,7 @@ async fn once_the_token_is_refused_the_web_site_is_read_again() {
     // sent a second time.
     let _ = c.get_rankings(&RankingKind::Year(2020), 1).await;
     assert!(!c.has_app_session());
-    assert_eq!(site.asked(), ["/app/v1/perfumes?y_0=2020&page=1&per_page=20&o=nr_desc&g_f=1&g_m=1&g_u=1", "/Release_Years/2020"]);
+    assert_eq!(site.asked(), ["/app/v1/perfumes?y_0=2020&page=1&per_page=20&o=n_asc&g_f=1&g_m=1&g_u=1", "/Release_Years/2020"]);
     let _ = c.get_rankings(&RankingKind::Year(2020), 1).await;
     assert_eq!(site.asked().len(), 3);
     assert_eq!(site.asked()[2], "/Release_Years/2020");

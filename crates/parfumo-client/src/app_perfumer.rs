@@ -5,15 +5,18 @@ use serde_json::Value;
 
 use crate::{
     ClientError, ParfumoClient,
-    app_db::{count, text},
+    app_db::{count, matches, remember, text},
     models::{EntityRef, Listing, PerfumerPage},
     site::routes,
 };
 
 /// Rows asked per page: what the application asks, and the size of a page of the web site.
 const PER_PAGE: u32 = 20;
-/// The application never asks for more rows of one listing, and the web site shows no more.
+/// The web page of a perfumer shows no more rows: the pages promised are its own.
 const MAX_ROWS: u64 = 1000;
+/// Perfumers remembered at most: every perfume record read brings its own, and a server
+/// runs for weeks. Past this the memory is emptied and filled again.
+const MAX_PERFUMERS: usize = 1_000;
 /// The order of the web page: the most rated first (measured: the interface accepts it
 /// here). Without an order the creations come by name, which buries the known ones.
 const ORDER: &str = "nr_desc";
@@ -24,9 +27,12 @@ fn pair(k: &str, v: impl ToString) -> (String, String) {
 
 impl ParfumoClient {
     /// Remembers the number and the name of a perfumer under their slug: the interface only
-    /// knows perfumers by number, and no call of it finds one.
+    /// knows perfumers by number, and no call of it finds one. One slug per number: the
+    /// one the site gave last.
     pub(crate) fn remember_perfumer(&self, pf_id: u64, slug: &str, name: &str) {
-        self.t.perfumer_ids.lock().unwrap_or_else(|e| e.into_inner()).insert(slug.to_lowercase(), (pf_id, name.to_lowercase()));
+        let mut known = self.t.perfumer_ids.lock().unwrap_or_else(|e| e.into_inner());
+        known.retain(|_, (number, _)| *number != pf_id);
+        remember(&mut known, MAX_PERFUMERS, slug.to_lowercase(), (pf_id, name.to_lowercase()));
     }
 
     /// The number of a perfumer from a reference, read as the web code reads it (a Parfumo
@@ -60,22 +66,19 @@ impl ParfumoClient {
     }
 
     /// The record of a perfumer and one page of their creations (`GET /perfumer_details`),
-    /// asked as the application asks it: the best rated scents first, where the web page
-    /// lists the most rated first. `None` when the number of the perfumer is not known: the
-    /// caller then reads the web page.
+    /// the most rated first, as on the web page. `None` when the number of the perfumer is
+    /// not known, when the interface has no perfumer under it, or when it does not say how
+    /// many creations there are: the caller then reads the web page.
     pub(crate) async fn app_get_perfumer(&self, r: &str, page: u32) -> Result<Option<PerfumerPage>, ClientError> {
         let Some(pf_id) = self.app_perfumer_number(r)? else { return Ok(None) };
         let page = page.max(1);
         // Without a gender the listing must be asked for all three.
         let params =
             [pair("pf_id", pf_id), pair("page", page), pair("per_page", PER_PAGE), pair("o", ORDER), pair("g_f", 1), pair("g_m", 1), pair("g_u", 1)];
-        let answer = self.app_get("/perfumer_details", &params).await?;
+        let Some(answer) = self.app_read("/perfumer_details", &params).await? else { return Ok(None) };
         let outdated = |what: &str| ClientError::ParserOutdated(format!("/app/v1/perfumer_details: {what}"));
-        // No perfumer in the answer: a number no perfumer has.
-        let pf = answer
-            .get("pf")
-            .filter(|pf| pf.as_object().is_some_and(|o| !o.is_empty()))
-            .ok_or_else(|| ClientError::NotFound(format!("perfumer {pf_id}")))?;
+        // No perfumer in the answer: whether there is one is for the web site to say.
+        let Some(pf) = answer.get("pf").filter(|pf| pf.as_object().is_some_and(|o| !o.is_empty())) else { return Ok(None) };
         let (slug, name) =
             (text(pf, "name_url").ok_or_else(|| outdated("no perfumer id"))?, text(pf, "name").ok_or_else(|| outdated("no perfumer name"))?);
         let numeric_id = count(pf, "id");
@@ -84,10 +87,11 @@ impl ParfumoClient {
         }
         let listing = answer.get("p").ok_or_else(|| outdated("no perfumes"))?;
         let rows = listing.get("rows").and_then(Value::as_array).ok_or_else(|| outdated("no rows"))?;
-        let total = count(listing, "matches").unwrap_or(0);
+        // A count the answer does not carry is not a count of zero: the web page tells it.
+        let Some(total) = matches(listing) else { return Ok(None) };
         Ok(Some(PerfumerPage {
             perfumer: EntityRef { url: self.t.absolute(&routes::perfumer(&slug)), id: slug, numeric_id, name },
-            // The interface names the country by a number only.
+            // The interface names the country by a number only: the country stays absent.
             country: None,
             perfumes: Listing {
                 items: rows.iter().filter_map(|row| self.summary_from_index_row(row)).collect(),
@@ -96,5 +100,26 @@ impl ParfumoClient {
                 total_items: u32::try_from(total).ok(),
             },
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MAX_PERFUMERS;
+    use crate::{ClientConfig, GlobalLimiter, ParfumoClient};
+
+    #[test]
+    fn the_memory_of_perfumers_is_bounded_and_keeps_one_slug_per_number() {
+        let c = ParfumoClient::new(ClientConfig::default(), GlobalLimiter::new(0), None).unwrap();
+        for pf_id in 1..=(MAX_PERFUMERS as u64 + 10) {
+            c.remember_perfumer(pf_id, &format!("Perfumer_{pf_id}"), "Someone");
+        }
+        // The site gives another slug for a number: the old one names nothing any more.
+        c.remember_perfumer(509, "JeanChristophe_Herault", "Jean-Christophe Hérault");
+        c.remember_perfumer(509, "Jean-Christophe_Herault", "Jean-Christophe Hérault");
+        let known = c.t.perfumer_ids.lock().unwrap();
+        assert!(known.len() <= MAX_PERFUMERS, "{} perfumers remembered", known.len());
+        assert!(!known.contains_key("jeanchristophe_herault"));
+        assert_eq!(known.get("jean-christophe_herault"), Some(&(509, "jean-christophe hérault".to_string())));
     }
 }
