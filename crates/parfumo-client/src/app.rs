@@ -32,19 +32,28 @@ const TOKEN_DOMAIN: &str = "app-token.invalid";
 
 /// How long the site blocks an address (measured: its page asks to try again in five minutes).
 pub(crate) const BLOCK: Duration = Duration::from_secs(300);
-/// What was recorded of the block page: an HTML page, status 404, that says this.
-const BLOCK_MARKER: &str = "Access Denied";
+/// What was recorded of the block page: an HTML page, status 404, with this heading and
+/// this wait ("Access Denied … try again in 5 minutes").
+const BLOCK_HEADING: &str = "Access Denied";
+const BLOCK_WAIT: &str = "try again in";
 /// Refused tokens remembered per user: enough to outlive every copy of them.
 const REFUSED_KEPT: usize = 8;
 
 /// Whether an answer is the page by which the site tells that it blocks the address. Only
-/// what was recorded is relied on: status 404, a page that is not JSON, its heading. From
-/// the application interface (`from_app`), which answers in JSON, such a page under any
-/// error status is taken for it; a web page must have the recorded status, so that
-/// another page of the site with that heading is not taken for a block.
+/// what was recorded is relied on: status 404, a page that is not JSON, its words.
+///
+/// A match stops the application interface for every user of the process, so a page of
+/// the web site must be the recorded one in full: its status, its heading and the wait it
+/// announces. A page that merely says "Access Denied" is a page that does not exist.
+/// The application interface (`from_app`) answers in JSON: there a page with that heading
+/// under any error status is taken for the block, since the mistake costs less that way
+/// (the web site answers for five minutes) than the other (a perfume reported missing,
+/// and more requests sent to an address that is blocked).
 pub(crate) fn is_block_page(status: u16, body: &str, from_app: bool) -> bool {
-    let status_fits = if from_app { status >= 400 } else { status == 404 };
-    status_fits && body.contains(BLOCK_MARKER) && !body.trim_start().starts_with(['{', '['])
+    if !body.contains(BLOCK_HEADING) || body.trim_start().starts_with(['{', '[']) {
+        return false;
+    }
+    if from_app { status >= 400 } else { status == 404 && body.contains(BLOCK_WAIT) }
 }
 
 fn pair(k: &str, v: impl ToString) -> (String, String) {
@@ -150,7 +159,7 @@ impl AppSession {
     }
 
     /// Keeps the token a login obtained, unless the session was dropped since the login
-    /// started (`drops` as read before it) or the site already refused that token.
+    /// was decided (`drops` as read then) or the site already refused that token.
     fn obtained(&self, token: &str, drops: u64) -> bool {
         let mut state = self.state();
         if state.drops != drops || state.refused.iter().any(|t| t == token) {
@@ -252,6 +261,15 @@ impl ParfumoClient {
         self.t.user.app.forget();
     }
 
+    /// Counts the times the session of the user was forgotten by its owner
+    /// ([`Self::forget_app_session`], [`crate::UserLimiter::forget_app_session`]). Read
+    /// together with whatever decides that a login is to be made, and given to
+    /// [`Self::app_login_since`]: a session forgotten after that decision is then not
+    /// brought back by the login, however short the time between the two.
+    pub fn app_session_generation(&self) -> u64 {
+        self.t.user.app.drops()
+    }
+
     /// Logs in to the application interface with the member's e-mail and password, and
     /// keeps the session token for every client of the user. Never retried here.
     ///
@@ -260,22 +278,33 @@ impl ParfumoClient {
     /// address that no longer exists, a rate limit) is another error. The token is not kept
     /// (`LoginRequired`) when the session was forgotten while the login was under way.
     pub async fn app_login(&self, email: &str, password: &str) -> Result<(), ClientError> {
+        self.app_login_since(email, password, self.app_session_generation()).await
+    }
+
+    /// [`Self::app_login`] decided at an earlier moment, when the session was at
+    /// `generation` ([`Self::app_session_generation`]): the token is not kept
+    /// (`LoginRequired`) when the session was forgotten since then, before the login
+    /// started as well as while it was under way.
+    pub async fn app_login_since(&self, email: &str, password: &str, generation: u64) -> Result<(), ClientError> {
         if email.trim().is_empty() || password.is_empty() {
             return Err(ClientError::InvalidInput("e-mail and password must not be empty".into()));
         }
         // The site only asks for some text that names the device.
         let device = format!("parfumo-mcp-{:016x}", rand::random::<u64>());
         let form = [pair("email", email.trim()), pair("password", password), pair("device_id", device)];
-        let session = &self.t.user.app;
-        let drops = session.drops();
         let (status, body) = self.t.app_send(Method::POST, LOGIN, &form, Auth::Login).await?;
         let json: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
-        let refused = json.get("status").and_then(Value::as_str) == Some("error");
+        // What the interface answers to a wrong password was never recorded. Its recorded
+        // way of saying no is `{"status":"error", …}`, under 401 when it does not know who
+        // is asking: only that is read as a refusal of the credentials, which is final.
+        // 400, 403 and 422 may as well be a lockout, a rule on the address or a field that
+        // became required: they say nothing certain of the credentials.
+        let refused = !json.is_null() && (status == 401 || (status < 300 && json.get("status").and_then(Value::as_str) == Some("error")));
         match json.get("auth_token").and_then(Value::as_str).filter(|t| !t.is_empty()) {
-            Some(token) if session.obtained(token, drops) => Ok(()),
+            Some(token) if self.t.user.app.obtained(token, generation) => Ok(()),
             Some(_) => Err(ClientError::LoginRequired),
+            None if refused => Err(ClientError::InvalidCredentials),
             None if json.is_null() && status < 400 => Err(ClientError::ParserOutdated(format!("{PREFIX}{LOGIN} did not answer in JSON"))),
-            None if !json.is_null() && (matches!(status, 400 | 401 | 403 | 422) || (status < 300 && refused)) => Err(ClientError::InvalidCredentials),
             None if status < 300 => Err(ClientError::ParserOutdated(format!("{PREFIX}{LOGIN}: no session token in the answer"))),
             None => Err(ClientError::Upstream(format!("HTTP {status} on {PREFIX}{LOGIN}"))),
         }
@@ -308,5 +337,28 @@ impl ParfumoClient {
             .filter(|n| !n.is_empty())
             .map(str::to_string)
             .ok_or_else(|| ClientError::ParserOutdated(format!("{PREFIX}/auth/me: no nickname")))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_block_page;
+
+    #[test]
+    fn the_block_page_is_what_was_recorded_of_it_and_no_other_page() {
+        let page = "<html><head><title>Access Denied</title></head><body><h1>Access Denied</h1><p>Please try again in 5 minutes.</p></body></html>";
+        assert!(is_block_page(404, page, false) && is_block_page(404, page, true));
+        // On the web site: under another status, or with the heading alone, it is another page.
+        let heading_alone = "<html><body><h1>Access Denied</h1><p>This page is hidden.</p></body></html>";
+        assert!(!is_block_page(403, page, false) && !is_block_page(200, page, false));
+        assert!(!is_block_page(404, heading_alone, false));
+        assert!(!is_block_page(404, "<html><body>Not found. Please try again in a moment.</body></html>", false));
+        // The application interface answers in JSON: a page with that heading, under any
+        // error status, is not one of its answers.
+        assert!(is_block_page(404, heading_alone, true) && is_block_page(403, heading_alone, true));
+        assert!(!is_block_page(200, heading_alone, true));
+        // An answer in JSON is never the block page, whatever it says.
+        let json = r#"{"status":"error","message":"Access Denied, try again in 5 minutes"}"#;
+        assert!(!is_block_page(404, json, true) && !is_block_page(404, json, false));
     }
 }

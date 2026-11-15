@@ -167,18 +167,25 @@ async fn a_wrong_password_is_reported_and_leaves_no_token() {
 async fn only_an_answer_of_the_login_itself_refuses_the_credentials() {
     let (c, site, _) = spawn().await;
     let answers = |answer: (u16, &'static str)| *site.login_answer.lock().unwrap() = Some(answer);
-    // The interface answered the login and gave no token: these credentials are refused.
-    for refusal in [
-        (401, r#"{"status":"error","message":"Invalid credentials"}"#),
-        (200, r#"{"status":"error","message":"Invalid credentials"}"#),
-        (403, r#"{"error":"Forbidden"}"#),
-    ] {
+    // The interface says that it does not know who is asking, as it does to a dead token
+    // (401), or answers the login with an error of its own: these credentials are refused.
+    for refusal in [(401, r#"{"status":"error","message":"Invalid credentials"}"#), (200, r#"{"status":"error","message":"Invalid credentials"}"#)] {
         answers(refusal);
         assert_eq!(c.app_login(EMAIL, PASSWORD).await.unwrap_err(), ClientError::InvalidCredentials, "{refusal:?}");
     }
-    // Anything else says nothing about them: they must not be given up for it.
-    answers((404, r#"{"error":"Not found"}"#));
-    assert!(matches!(c.app_login(EMAIL, PASSWORD).await.unwrap_err(), ClientError::Upstream(_)), "the call is gone");
+    // Anything else says nothing about them: they must not be given up for it. What the
+    // interface answers to a wrong password was never recorded, and a 403, a 400 or a 422
+    // may as well be a lockout, a rule on the address or a field that became required.
+    for other in [
+        (403, r#"{"error":"Forbidden"}"#),
+        (403, r#"{"status":"error","message":"Too many attempts"}"#),
+        (400, r#"{"status":"error","message":"Missing header"}"#),
+        (422, r#"{"error":"Unprocessable"}"#),
+        (404, r#"{"error":"Not found"}"#),
+    ] {
+        answers(other);
+        assert!(matches!(c.app_login(EMAIL, PASSWORD).await.unwrap_err(), ClientError::Upstream(_)), "{other:?}");
+    }
     answers((200, r#"{"status":"success"}"#));
     assert!(matches!(c.app_login(EMAIL, PASSWORD).await.unwrap_err(), ClientError::ParserOutdated(_)), "the answer changed");
     answers((200, "<html>maintenance</html>"));
@@ -187,7 +194,7 @@ async fn only_an_answer_of_the_login_itself_refuses_the_credentials() {
     assert!(matches!(c.app_login(EMAIL, PASSWORD).await.unwrap_err(), ClientError::Upstream(_)));
     answers((429, r#"{"error":"Too many requests"}"#));
     assert!(matches!(c.app_login(EMAIL, PASSWORD).await.unwrap_err(), ClientError::RateLimited { .. }));
-    assert_eq!(requests(&site), 8, "a login is never repeated, whatever it answers");
+    assert_eq!(requests(&site), 11, "a login is never repeated, whatever it answers");
     assert!(!c.has_app_session());
 }
 
@@ -315,6 +322,18 @@ async fn a_login_answered_after_the_session_was_dropped_brings_none_back() {
     c.forget_app_session();
     assert_eq!(login.await.unwrap().unwrap_err(), ClientError::LoginRequired);
     assert!(!c.has_app_session(), "the token of a dropped session was kept");
+
+    // The same when the session is dropped after the login was decided and before it
+    // starts: what tells is where the session stood at the decision.
+    site.delay_ms.store(0, Ordering::SeqCst);
+    let decided_at = c.app_session_generation();
+    c.forget_app_session();
+    assert_ne!(c.app_session_generation(), decided_at);
+    assert_eq!(c.app_login_since(EMAIL, PASSWORD, decided_at).await.unwrap_err(), ClientError::LoginRequired);
+    assert!(!c.has_app_session(), "a login decided for a session that was dropped since brought one back");
+    // A login decided now keeps its token.
+    c.app_login_since(EMAIL, PASSWORD, c.app_session_generation()).await.unwrap();
+    assert!(c.has_app_session());
 }
 
 #[tokio::test]

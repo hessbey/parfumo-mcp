@@ -199,6 +199,16 @@ async fn blocked(State(m): S) -> Response {
         .into_response()
 }
 
+/// A page that does not exist, and says so with the heading of the block page: it lacks
+/// the wait the block page announces.
+async fn denied() -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        html("<html><head><title>Access Denied</title></head><body><h1>Access Denied</h1><p>This page is hidden.</p></body></html>"),
+    )
+        .into_response()
+}
+
 async fn moved() -> Response {
     redirect("/Perfumes/Dior")
 }
@@ -231,6 +241,7 @@ async fn start() -> (String, Arc<Mock>) {
         .route("/Perfumes/Moved/To_App", get(to_app))
         .route("/app/v1/{*call}", get(app_interface))
         .route("/blocked", get(blocked))
+        .route("/denied", get(denied))
         .fallback(not_found)
         .with_state(mock.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -347,8 +358,14 @@ async fn nothing_is_asked_of_the_application_interface_without_a_token() {
 async fn the_block_page_on_a_web_page_asks_to_wait_instead_of_saying_not_found() {
     let (base, mock) = start().await;
     let c = client(&base);
+    // A page of the site that merely has the heading of the block page is a page that does
+    // not exist: it stops nothing, for this user or any other.
+    assert!(matches!(c.fetch_page("/denied").await, Err(ClientError::NotFound(_))), "taken for a block of the address");
+    assert!(!c.app_blocked(), "one page with that heading stopped the application interface for the whole process");
+    // The block page itself: its heading and the wait it announces.
     assert_eq!(c.fetch_page("/blocked").await.unwrap_err(), ClientError::RateLimited { retry_after_secs: Some(300) });
     assert_eq!(mock.count("blocked"), 1, "the page is not asked for again");
+    assert!(c.app_blocked(), "the address is blocked: nothing leaves for the application interface");
     // The web site is still asked while the block lasts: it is not known to cover it.
     assert!(c.fetch_page("/moved").await.is_ok());
     // An ordinary 404 is still a page that does not exist.
