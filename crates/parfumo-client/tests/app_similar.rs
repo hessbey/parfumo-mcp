@@ -48,7 +48,22 @@ struct Site {
     every_record: AtomicBool,
     /// Whether a page of the web site was asked with the session token.
     token_on_web: AtomicBool,
+    /// What happens to the interface once the list of similar perfumes was served, in the
+    /// middle of a read: nothing, the session ends, or the address is blocked.
+    after_list: Mutex<AfterList>,
+    /// It happened: the interface now answers that way.
+    cut: AtomicBool,
 }
+
+#[derive(Clone, Copy, PartialEq)]
+enum AfterList {
+    Served,
+    SessionEnded,
+    Blocked,
+}
+
+/// The page by which the site blocks an address, from what docs/APP_API.md quotes of it.
+const BLOCK_PAGE: &str = "<html><head><title>Access Denied</title></head><body><h1>Access Denied</h1><p>try again in 5 minutes</p></body></html>";
 
 /// The last two rows of the recorded list, as an answer of their own.
 fn two_rows() -> String {
@@ -78,7 +93,8 @@ async fn handler(State(site): State<Arc<Site>>, uri: Uri, headers: HeaderMap, _b
         site.token_on_web.fetch_or(token.is_some(), Ordering::SeqCst);
         let html = |text: &'static str| (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], text).into_response();
         return match uri.path() {
-            "/Perfumes/Dior/Sauvage_Eau_de_Toilette" => html(WEB_PERFUME),
+            // The page of Sauvage stands in for the page of a perfume of the listing too.
+            "/Perfumes/Dior/Sauvage_Eau_de_Toilette" | "/Perfumes/Creed/absolu-aventus" => html(WEB_PERFUME),
             "/action/perfume/get_similar.php" => html(WEB_SIMILAR),
             "/action/perfume/_get_dupes.php" => html(DUPES),
             _ => not_found(),
@@ -87,11 +103,18 @@ async fn handler(State(site): State<Arc<Site>>, uri: Uri, headers: HeaderMap, _b
     if uri.path() == "/app/v1/auth/login" {
         return json(r#"{"status":"success","auth_token":"tok"}"#);
     }
-    if token != Some("Bearer tok") {
+    let cut = site.cut.load(Ordering::SeqCst).then(|| *site.after_list.lock().unwrap());
+    if cut == Some(AfterList::Blocked) {
+        return (StatusCode::NOT_FOUND, [(header::CONTENT_TYPE, "text/html")], BLOCK_PAGE).into_response();
+    }
+    if token != Some("Bearer tok") || cut == Some(AfterList::SessionEnded) {
         return (StatusCode::UNAUTHORIZED, r#"{"status":"error","message":"Authorization header required"}"#).into_response();
     }
     match uri.path() {
-        "/app/v1/similar" if asked.contains("type=similar") => json(&site.similar.lock().unwrap()),
+        "/app/v1/similar" if asked.contains("type=similar") => {
+            site.cut.store(*site.after_list.lock().unwrap() != AfterList::Served, Ordering::SeqCst);
+            json(&site.similar.lock().unwrap())
+        }
         "/app/v1/similar" if asked.contains("type=layer") => json(&site.layer.lock().unwrap()),
         "/app/v1/search" => json(SEARCH_CREED),
         "/app/v1/perfumes" => json(PERFUMES_BRAND),
@@ -111,6 +134,8 @@ async fn anonymous() -> (ParfumoClient, Arc<Site>) {
         layer: Mutex::new(two_rows()),
         every_record: AtomicBool::new(false),
         token_on_web: AtomicBool::new(false),
+        after_list: Mutex::new(AfterList::Served),
+        cut: AtomicBool::new(false),
     });
     let app = Router::new().fallback(handler).with_state(site.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -307,6 +332,76 @@ async fn a_reference_the_interface_does_not_find_is_left_to_the_web_site() {
     assert_eq!(site.asked.lock().unwrap().as_slice(), [&["/app/v1/search?filter=Dior"][..], &WEB[..]].concat());
     assert!(!site.token_on_web.load(Ordering::SeqCst), "the session token is for the application interface only");
     assert_web_answer(&found);
+}
+
+/// The lists of the stand-in page as the HTML code reads them, layering included.
+fn assert_whole_web_answer(found: &SimilarPerfumes) {
+    assert_eq!(found.similar.len(), 30, "the list of the web site, not the four rows of the interface");
+    assert_eq!(found.similar[0].p_id, 102281);
+    assert_eq!(found.layering.len(), 30, "the layering suggestions of the web site");
+    assert!(found.warnings.is_empty(), "nothing is missing: {:?}", found.warnings);
+}
+
+#[tokio::test]
+async fn a_session_ended_in_the_middle_of_the_read_hands_all_of_it_to_the_web_site() {
+    let (c, site) = logged_in().await;
+    // The perfume is known from a listing, so that both sides can be asked about it.
+    c.search_perfumes(&SearchQuery { brand: Some("creed".into()), ..SearchQuery::default() }, 1).await.unwrap();
+    site.asked.lock().unwrap().clear();
+    *site.after_list.lock().unwrap() = AfterList::SessionEnded;
+
+    // The list of similar perfumes is served, then the site refuses the token.
+    let found = c.get_similar_perfumes_with("Creed/absolu-aventus", options(0, true, false)).await.unwrap();
+    assert_eq!(
+        site.asked.lock().unwrap().as_slice(),
+        [
+            "/app/v1/similar?action=list&type=similar&p_id=225233&limit=30",
+            "/app/v1/similar?action=list&type=layer&p_id=225233&limit=30",
+            // The web site, from the start: the page, the similar perfumes, the layering.
+            "/Perfumes/Creed/absolu-aventus",
+            "/action/perfume/get_similar.php",
+            "/Perfumes/Creed/absolu-aventus",
+            "/action/perfume/get_similar.php",
+        ],
+        "one refusal, then the web site for the whole read"
+    );
+    assert_whole_web_answer(&found);
+    assert!(!c.has_app_session(), "the refused token is forgotten");
+    assert!(!site.token_on_web.load(Ordering::SeqCst));
+
+    // The same when the refusal falls on the record of a row.
+    let (c, site) = logged_in().await;
+    c.search_perfumes(&SearchQuery { brand: Some("creed".into()), ..SearchQuery::default() }, 1).await.unwrap();
+    *site.after_list.lock().unwrap() = AfterList::SessionEnded;
+    site.asked.lock().unwrap().clear();
+    let err = c.get_similar_perfumes_with("225233", options(2, false, false)).await.unwrap_err();
+    // A number is no address of the web site: it says so, rather than a list without links.
+    assert!(matches!(err, ClientError::InvalidInput(_)), "{err:?}");
+    assert_eq!(
+        site.asked.lock().unwrap().as_slice(),
+        ["/app/v1/similar?action=list&type=similar&p_id=225233&limit=30", "/app/v1/perfume_details/55402"],
+        "one refusal, and nothing more is asked of the interface"
+    );
+}
+
+#[tokio::test]
+async fn a_block_met_in_the_middle_of_the_read_hands_all_of_it_to_the_web_site() {
+    let (c, site) = logged_in().await;
+    c.search_perfumes(&SearchQuery { brand: Some("creed".into()), ..SearchQuery::default() }, 1).await.unwrap();
+    site.asked.lock().unwrap().clear();
+    *site.after_list.lock().unwrap() = AfterList::Blocked;
+
+    let found = c.get_similar_perfumes_with("Creed/absolu-aventus", options(0, true, false)).await.unwrap();
+    assert_whole_web_answer(&found);
+    let asked = site.asked.lock().unwrap().clone();
+    assert_eq!(asked.iter().filter(|a| a.starts_with("/app/v1/")).count(), 2, "the list, then the call that met the block page: {asked:?}");
+    assert!(c.has_app_session() && c.app_blocked(), "a block says nothing about the token");
+
+    // While the block lasts the web site answers at once, and the interface is left alone.
+    site.asked.lock().unwrap().clear();
+    let found = c.get_similar_perfumes_with("Creed/absolu-aventus", options(0, true, false)).await.unwrap();
+    assert_whole_web_answer(&found);
+    assert!(site.asked.lock().unwrap().iter().all(|a| !a.starts_with("/app/v1/")), "asked of the interface during the block");
 }
 
 #[tokio::test]
