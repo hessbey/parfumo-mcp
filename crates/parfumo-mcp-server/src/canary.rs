@@ -14,7 +14,9 @@
 //!   canary account, as for every user whose account is linked. Without a token the area is
 //!   skipped and nothing is asked of the interface; a token it refuses is a failed check,
 //!   and is not sent again;
-//! - `account`: the pages of the canary account on the web site.
+//! - `account`: the pages of the canary account on the web site, by a client that holds
+//!   the web session of the account and no token, so that the nickname, the rating panel
+//!   and the classification panel are read on the web site too.
 
 use std::{future::Future, time::Instant};
 
@@ -638,8 +640,35 @@ async fn interface_area(r: &mut Runner, sessions: &Sessions, user_id: i64) {
     sessions.return_app_session(user_id, &client);
 }
 
-/// Reads of the linked (test) account. Lists may be empty: the parsers still check the
-/// structure of the page around them.
+/// A second client on the web session of the account, without its session token of the
+/// application interface, in the request slot of the same user: the client the `account`
+/// area reads with.
+///
+/// The tools read the member's nickname, ratings and classification votes on the web site
+/// whenever no token is held (an account linked by cookie, a token the interface refused)
+/// and whenever the interface gives an answer it is not trusted with (a vote, a rating of
+/// zero). The account client holds a token and would ask the interface: the web panels and
+/// their parsers would go unchecked, and the pages of the account would be judged on a
+/// nickname the interface gave. The interface has its own area.
+///
+/// The account client itself keeps its token: taking it away, even for a moment, would
+/// take it from the tool calls of the same user that run meanwhile.
+fn without_token(sessions: &Sessions, user_id: i64, account: &ParfumoClient) -> Result<ParfumoClient, String> {
+    let web = sessions.uncached_public_client(user_id).map_err(|e| e.to_string())?;
+    web.import_cookies(&account.export_cookies());
+    // The token is kept with the cookies: it is dropped before anything is sent.
+    web.forget_app_session();
+    if web.has_app_session() {
+        return Err("the copy of the account session still holds a token of the application interface".into());
+    }
+    Ok(web)
+}
+
+/// Reads of the linked (test) account on the web site. Lists may be empty: the parsers
+/// still check the structure of the page around them. `c` holds the web session of the
+/// account and no token of the application interface (see [`without_token`]): the
+/// nickname, the rating panel and the classification panel are read on the web site, and
+/// the member's own pages are asked under the nickname of the web site.
 async fn account_checks(r: &mut Runner, c: &ParfumoClient, p_id: Option<u64>) {
     const A: &str = "account";
     let nick = r.check(A, "own nickname", "own_nick", c.own_nick(), |n| filled(n, "nickname").map(|()| "found".to_string())).await;
@@ -743,7 +772,10 @@ pub async fn run(state: &ServerState, user: Option<&db::User>) -> Report {
             r.skip("account", "account session", "account_client", &why);
         } else {
             match sessions.account_client(user.id).await {
-                Ok(client) => account_checks(&mut r, &client, p_id).await,
+                Ok(client) => match without_token(sessions, user.id, &client) {
+                    Ok(web) => account_checks(&mut r, &web, p_id).await,
+                    Err(why) => r.push("account", "web session", "uncached_public_client", Outcome::Failed, why, None),
+                },
                 Err(e) => r.push("account", "account session", "account_client", Outcome::Failed, e.to_string(), None),
             }
         }
