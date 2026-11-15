@@ -852,7 +852,7 @@ impl ParfumoTools {
     }
 
     /// Numeric perfume id for a write. A `Brand/Perfume` reference is resolved on the public
-    /// (cached, anonymous) client: the account session is not needed to read a perfume page.
+    /// (anonymous) client: the account session is not needed to read a perfume page.
     pub(crate) async fn resolve_p_id(&self, c: &Clients, reference: &str) -> Result<u64, ToolError> {
         c.public.perfume_numeric_id(reference).await.map(|(id, _)| id).map_err(|e| self.ce(e))
     }

@@ -59,9 +59,9 @@ pub fn round_floats(v: &mut serde_json::Value) {
 /// The two Parfumo clients of the calling user.
 #[derive(Clone)]
 pub struct Clients {
-    /// Logged-in session of the user's linked Parfumo account (never cached).
+    /// Logged-in session of the user's linked Parfumo account.
     pub account: ParfumoClient,
-    /// Anonymous client for public pages (shared cache, no account cookie).
+    /// Anonymous client for public pages (no account cookie).
     pub public: ParfumoClient,
     /// The user of this server the call belongs to (daily caps, audit).
     pub user_id: i64,

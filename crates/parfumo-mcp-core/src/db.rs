@@ -672,15 +672,6 @@ impl Db {
     }
 }
 
-impl parfumo_client::PageCache for Db {
-    fn get(&self, key: &str) -> Option<String> {
-        self.cache_get(key)
-    }
-    fn put(&self, key: &str, body: &str, ttl: Duration) {
-        self.cache_put(key, body, ttl);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

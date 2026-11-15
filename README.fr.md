@@ -31,9 +31,11 @@ des parfums, votre collection, vos ports, vos notes et avis, et la partie commun
   pas les écritures publiques, puis est plafonné par outil et par jour.
 - **Vérifiable.** Chaque appel d'outil est journalisé en local ; `parfumo-mcp audit --writes`
   montre ce qui a réellement été écrit sur votre compte.
-- **Respectueux du site.** Une requête par seconde par utilisateur, délai aléatoire,
-  `User-Agent` fixe et honnête, cache de 24 h pour les fiches et de 1 h pour les recherches
-  et classements. Aucune résolution de captcha, aucun contournement de Cloudflare.
+- **Toujours à jour.** Chaque lecture interroge Parfumo : aucune page n'est conservée pour
+  être resservie plus tard.
+- **Prudent avec le site.** Une requête par seconde par utilisateur, délai aléatoire,
+  `User-Agent` fixe et honnête. Aucune résolution de captcha, aucun contournement de
+  Cloudflare.
 - **Vise `www.parfumo.com`, le site en anglais.** Le site allemand `www.parfumo.de` utilise
   d'autres adresses et d'autres libellés et n'est pas pris en charge.
 - **Les secrets restent hors de la conversation.** Les identifiants se saisissent sur une

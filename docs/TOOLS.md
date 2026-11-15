@@ -43,7 +43,7 @@ variables et `link_url` est absent. Les exemples de ce document viennent du serv
 | Taille | Environ 25 000 caractères au plus par réponse. Si la limite est atteinte avant `limit`, la réponse contient moins d'éléments et `next_cursor` reprend au premier élément non renvoyé |
 | Contenu de membres | Avis, statements et texte de page sont rangés sous `untrusted_member_content` ou `untrusted_page_content`, avec un avertissement `untrusted_content_notice`. Dans le texte lisible, ils sont encadrés par `<untrusted_member_content>…</untrusted_member_content>` |
 | Annotations | Les 10 outils de base de données : `readOnlyHint: true`, `destructiveHint: false`, `idempotentHint: true`, `openWorldHint: true` |
-| Débit | Une requête par seconde vers Parfumo par utilisateur. Un appel qui lit plusieurs pages du site prend plusieurs secondes. Les pages sont gardées en cache 24 h (fiches) ou 1 h (recherches, classements) |
+| Débit | Une requête par seconde vers Parfumo par utilisateur. Un appel qui lit plusieurs pages du site prend plusieurs secondes. Aucune page n'est conservée : chaque lecture interroge le site |
 | Arrondi | Notes et pourcentages arrondis à deux décimales |
 
 ### Erreurs
@@ -491,7 +491,7 @@ groupes de dupes signalés.
 Le site liste les similaires sans lien : seuls les cinq premiers ont leur `id` et leur
 `url` résolus (une requête chacun). Pour les autres, chercher par nom et marque avec
 `parfumo_search_perfumes`. Le premier appel pour un parfum coûte une dizaine de requêtes,
-donc une dizaine de secondes ; le résultat est ensuite en cache 24 h.
+donc une dizaine de secondes, à chaque appel : rien n'est conservé.
 
 Appel réel : `perfume=Dior/Sauvage_Eau_de_Toilette` (30 similaires, 30 en superposition,
 1 groupe de dupes ramené à 36 candidats pour tenir dans la limite de taille).
