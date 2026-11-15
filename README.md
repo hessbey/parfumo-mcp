@@ -31,9 +31,9 @@ blogs, Souk).
   then capped per tool and per day.
 - **Auditable.** Every tool call is logged locally; `parfumo-mcp audit --writes` shows what
   was really written to your account.
-- **Polite to the site.** One request per second per user, random jitter, a fixed and honest
-  `User-Agent`, a 24 h cache for pages and 1 h for searches and rankings. No captcha
-  solving, no Cloudflare bypass.
+- **Always current.** Every read asks Parfumo: no page is kept to be served again later.
+- **Careful with the site.** One request per second per user, random jitter, a fixed and
+  honest `User-Agent`. No captcha solving, no Cloudflare bypass.
 - **Targets `www.parfumo.com`, the English site.** The German site `www.parfumo.de` uses
   different URLs and labels and is not supported.
 - **Secrets stay out of the conversation.** Credentials are typed on a login page — on your

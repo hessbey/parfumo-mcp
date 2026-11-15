@@ -10,7 +10,7 @@ contains only the HTTP server, `parfumo-mcp-server`.
 | Transport | MCP Streamable HTTP on `/mcp`, stateless, `rmcp` 3.9.0. Specification `2026-07-28`, and `2025-11-25` for older clients |
 | Client authentication | One access key per user. It is sent as a bearer token, or typed once on the login page of an OAuth 2.1 client (PKCE S256, protected-resource metadata). No anonymous request on `/mcp` |
 | Parfumo account | Linked per user on the `/link` page, in credentials mode (AES-256-GCM encrypted) or cookie mode |
-| Users | Created on the command line. Cookies, private cache, quotas and audit log are isolated per user |
+| Users | Created on the command line. Cookies, quotas and audit log are isolated per user |
 | Canary | Once a day, a read-only pass over every kind of page on the real site; reports any structure that changed |
 | Health | `GET /healthz`, with the last canary verdict |
 
@@ -34,14 +34,14 @@ docker compose run --rm --no-deps server keygen
 
 # 3. Start
 docker compose up -d
-curl https://<your-domain>/healthz        # {"canary":null,"status":"ok","version":"0.2.2"}
+curl https://<your-domain>/healthz        # {"canary":null,"status":"ok","version":"0.2.3"}
 ```
 
 Nothing is compiled on the server: Compose downloads the published image,
 `ghcr.io/hessbey/parfumo-mcp-server`, built for amd64 and arm64.
 
 - **Version.** Without a setting, the latest release runs. To pin one, add
-  `PARFUMO_MCP_VERSION=0.2.2` to `.env`: an upgrade then only happens when you change it.
+  `PARFUMO_MCP_VERSION=0.2.3` to `.env`: an upgrade then only happens when you change it.
 - **Upgrade.** `docker compose pull`, then `docker compose up -d`.
 - **Your own build.** `docker build -t ghcr.io/hessbey/parfumo-mcp-server:local .`, then
   `PARFUMO_MCP_VERSION=local` in `.env`.

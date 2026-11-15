@@ -34,7 +34,7 @@ journaux relus.
 | Débit : 1 requête par seconde par utilisateur, 2 au total, délai aléatoire | Tenu | `config.rs` borne les valeurs (jamais moins de 1000 ms, jamais plus de 2 par seconde) ; limiteur commun aux outils et au canari |
 | Plafonds d'écriture publique | Tenu | Jalon 4 : par outil, par utilisateur et par jour, persistants |
 | Reprise sur erreur : attente sur 429 et 5xx, arrêt sur 403 répété ou captcha | Tenu depuis ce jalon | Constat 1 |
-| Cache : 24 h, 1 h, rien pour le compte | Tenu | Le client du compte n'a pas de cache ; le canari non plus |
+| Cache : 24 h, 1 h, rien pour le compte | Abandonné à la version 0.2.3 | À la demande du commanditaire, plus aucune page n'est conservée : chaque lecture interroge le site, pour que la réponse ne soit jamais une copie datée |
 | Journal d'audit : chaque écriture, consultable, 90 jours | Tenu | Constat 9 ; `parfumo-mcp-server audit --writes` |
 | Secrets jamais dans les journaux, les erreurs, les réponses | Tenu | Tests des jalons 1 à 4, plus le rapport du canari (`the_canary_reads_the_linked_account_and_never_writes`) ; journal du serveur et rapport du canari relus après l'essai réel : ni cookie ni jeton |
 | HTTPS | Tenu par le déploiement | Caddy ; le serveur seul avertit si l'URL publique n'est pas `https` |

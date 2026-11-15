@@ -2,7 +2,7 @@
 
 [← Documentation](README.md)
 
-Version 0.2.2. All five milestones of the [specification](SPECIFICATION.md) are
+Version 0.2.3. All five milestones of the [specification](SPECIFICATION.md) are
 delivered, plus the local stdio binary. This page says what has been proven against the real
 site and what has not. Nothing here is assumed: a route that was never exercised is listed
 as such. The dated, detailed record is [MILESTONES.md](MILESTONES.md) (in French).
@@ -17,7 +17,7 @@ as such. The dated, detailed record is [MILESTONES.md](MILESTONES.md) (in French
 
 | Area | Evidence |
 | --- | --- |
-| Tests | 207 tests, no network access: parsers on recorded fixtures, the tools called in process against a fake site, the HTTP server (OAuth, tokens, isolation, canary) on its own, the real local binary driven through its pipes. `clippy -D warnings` is clean. Both run in CI on every push, the tests on Linux, macOS and Windows |
+| Tests | 208 tests, no network access: parsers on recorded fixtures, the tools called in process against a fake site, the HTTP server (OAuth, tokens, isolation, canary) on its own, the real local binary driven through its pipes. `clippy -D warnings` is clean. Both run in CI on every push, the tests on Linux, macOS and Windows |
 | Docker image | Built in CI; `scripts/check-image.sh` fails the build over 50 MB, if it runs as root, if `/healthz` does not answer, or over 100 MB of idle memory |
 | Database tools | Each of the 10 called on the live site through the server; outputs in [TOOLS.md](TOOLS.md) |
 | Login and session | Credentials mode and cookie mode, live, through the HTTP server; cookie mode live through the stdio binary |
@@ -27,7 +27,7 @@ as such. The dated, detailed record is [MILESTONES.md](MILESTONES.md) (in French
 | Some public writes | Settings, signature scent, time zone, follow and unfollow: sent live, read back, restored |
 | Safeguards | Public-write lock, daily caps (persisting across restarts) and recipient allow-list: by test and live |
 | Canary | 48 read-only checks `ok` on the live site (27 public, 21 on the test account), no write. Run again on the current code on 12 November 2026 by the maintainer, in the Docker image started with `docker-compose.local.yml`, the test account linked in credentials mode through the `/link` page in a browser: 48 ok, 0 changed, 0 failed, 0 skipped |
-| npm packages | Built around the release program, packed, installed in an empty project and run through npm's launcher, in CI on Linux, macOS and Windows: the command starts the program, an MCP client talks through it, exit codes and errors pass, a missing program is reported. Published since 0.2.2, with provenance: `npx -y parfumo-mcp`, run on Linux x64 against the real registry on 13 November 2026, installed the program and answered an MCP client with its 48 tools. The same command was run on Windows by the maintainer the same day |
+| npm packages | Built around the release program, packed, installed in an empty project and run through npm's launcher, in CI on Linux, macOS and Windows: the command starts the program, an MCP client talks through it, exit codes and errors pass, a missing program is reported. Published since 0.2.3, with provenance: `npx -y parfumo-mcp`, run on Linux x64 against the real registry on 13 November 2026, installed the program and answered an MCP client with its 48 tools. The same command was run on Windows by the maintainer the same day |
 | Local login page | The real local binary against a fake Parfumo, by test: an account linked on the page with no setting at all, used at once by the running server and kept across a restart; other addresses, other host names and forms from other sites refused; `login` and `logout` from another process. Driven with a real Chromium on 13 November 2026: language switch, wrong password refused, account linked, page closed. Live: the maintainer linked the Parfumo test account through the page with `npx -y parfumo-mcp login` on Windows, on 13 November 2026 |
 | Web pages in a browser | The `/link` page and the whole OAuth flow (login page, authorization code, token, then `/mcp`) driven with a real Chromium against the release server, on 12 November 2026: access key alone, language switch, wrong key refused. An earlier pass caught a bug the tests had missed: both forms were refused by every browser |
 | Isolation and secrets | Two users never see each other's data or actions; no secret in logs, errors, tool results or the canary report — by test |
@@ -84,7 +84,7 @@ Other points:
 ## Known limits
 
 - The first call of `parfumo_get_similar_perfumes` for a perfume takes about ten seconds
-  (some ten requests at one per second); the cache then serves it for 24 h.
+  (some ten requests at one per second), every time: no answer is kept.
 - The one-request-per-second limit is shared between the public tools and the account
   session of the same user.
 - Only `www.parfumo.com` in English is supported. The German site `www.parfumo.de` serves

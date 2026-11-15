@@ -11,7 +11,7 @@ use std::{
     time::Duration,
 };
 
-use parfumo_client::{ClientConfig, ClientError, GlobalLimiter, PageCache, ParfumoClient, StoredCookie, UserLimiter};
+use parfumo_client::{ClientConfig, ClientError, GlobalLimiter, ParfumoClient, StoredCookie, UserLimiter};
 use serde::{Deserialize, Serialize};
 
 use crate::{config::Config, crypto::MasterKey, db::Db};
@@ -171,7 +171,7 @@ impl Sessions {
         self.backoff.lock().unwrap_or_else(|p| p.into_inner()).remove(&user_id);
     }
 
-    fn new_client(&self, user_id: i64, cached: bool) -> Result<ParfumoClient, SessionError> {
+    fn new_client(&self, user_id: i64) -> Result<ParfumoClient, SessionError> {
         let limiter = self.limiters.lock().unwrap_or_else(|p| p.into_inner()).entry(user_id).or_default().clone();
         let cfg = ClientConfig {
             base_url: self.cfg.parfumo_base_url.clone(),
@@ -179,30 +179,28 @@ impl Sessions {
             jitter: self.cfg.user_jitter,
             ..ClientConfig::default()
         };
-        let cache: Arc<dyn PageCache> = Arc::new(self.db.clone());
-        ParfumoClient::with_limiter(cfg, self.global.clone(), cached.then_some(cache), limiter).map_err(|e| SessionError::Internal(e.to_string()))
+        // No page is kept: every read asks the site, so that an answer is never an old copy.
+        ParfumoClient::with_limiter(cfg, self.global.clone(), None, limiter).map_err(|e| SessionError::Internal(e.to_string()))
     }
 
     /// Anonymous client of one user, for the public database tools. It never carries the
-    /// user's Parfumo cookies: public pages are fetched without the account, so nothing
-    /// account-specific can reach the shared page cache.
+    /// user's Parfumo cookies: public pages are fetched without the account.
     pub fn public_client_for(&self, user_id: i64) -> Result<ParfumoClient, SessionError> {
         let mut map = self.public_clients.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(c) = map.get(&user_id) {
             return Ok(c.clone());
         }
-        let client = self.new_client(user_id, true)?;
+        let client = self.new_client(user_id)?;
         map.insert(user_id, client.clone());
         Ok(client)
     }
 
-    /// The account client of one user (its own cookie jar and rate limiter, never shared,
-    /// never cached).
+    /// The account client of one user (its own cookie jar and rate limiter, never shared).
     pub fn client_for(&self, user_id: i64) -> Result<ParfumoClient, SessionError> {
         if let Some(c) = self.clients.lock().unwrap_or_else(|p| p.into_inner()).get(&user_id) {
             return Ok(c.clone());
         }
-        let client = self.new_client(user_id, false)?;
+        let client = self.new_client(user_id)?;
         if let Some(cookies) = self.stored_cookies(user_id)? {
             client.import_cookies(&cookies);
         }
@@ -271,10 +269,10 @@ impl Sessions {
         self.backoff.lock().unwrap_or_else(|p| p.into_inner()).remove(&user_id);
     }
 
-    /// A client without cache and without account cookies, for the canary: it reads the
-    /// public site as it is now, through the rate limiter slot of `user_id`.
+    /// A client of its own, without account cookies, for the canary: it reads the public
+    /// site through the rate limiter slot of `user_id`.
     pub fn uncached_public_client(&self, user_id: i64) -> Result<ParfumoClient, SessionError> {
-        self.new_client(user_id, false)
+        self.new_client(user_id)
     }
 
     fn replace_client(&self, user_id: i64, client: ParfumoClient, rev: String) {
@@ -297,7 +295,7 @@ impl Sessions {
     /// (encrypted) only if Parfumo accepted them.
     pub async fn link_credentials(&self, user_id: i64, username: &str, password: &str) -> Result<(), SessionError> {
         let creds = Credentials { username: username.to_string(), password: password.to_string() };
-        let client = self.new_client(user_id, false)?;
+        let client = self.new_client(user_id)?;
         login_with_retries(&client, &creds, self.cfg.user_min_interval * 2).await?;
         let secret = self.key.encrypt(&serde_json::to_vec(&creds).map_err(internal)?, &aad(user_id, "credentials")).map_err(internal)?;
         let cookies = self.encrypt_cookies(user_id, &client)?;
@@ -310,7 +308,7 @@ impl Sessions {
     /// Cookie mode: no password on the server. Returns whether Parfumo treats the imported
     /// cookies as a logged-in session (heuristic, unproven without a test account).
     pub async fn link_cookie(&self, user_id: i64, cookie_header: &str) -> Result<bool, SessionError> {
-        let client = self.new_client(user_id, false)?;
+        let client = self.new_client(user_id)?;
         if client.import_cookie_header(cookie_header) == 0 {
             return Err(SessionError::Internal("no cookie found in the pasted text (expected `name=value; name=value`)".into()));
         }
@@ -551,7 +549,7 @@ impl Sessions {
         let cookies = match account {
             LocalAccount::Credentials(_) => None,
             LocalAccount::Cookie(header) => {
-                let client = self.new_client(user_id, false)?;
+                let client = self.new_client(user_id)?;
                 if client.import_cookie_header(header) == 0 {
                     return Err(SessionError::Internal(format!(
                         "{ENV_LOCAL_COOKIE} holds no cookie (expected `pf_auth=value`, or a whole `Cookie` header)"

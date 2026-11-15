@@ -2,8 +2,8 @@
 //! page and route the tools depend on, on the live site, and report whatever no longer has
 //! the structure the parsers expect.
 //!
-//! The canary only reads. It sends no write, not even a dry run, and uses clients without
-//! cache, so that it sees the site as it is now. It goes through the same rate limiter as
+//! The canary only reads. It sends no write, not even a dry run, and sees the site as it is
+//! now, like every read of the tools. It goes through the same rate limiter as
 //! the tools (one request per second), and stops at once on a captcha or a rate limit.
 
 use std::{future::Future, time::Instant};

@@ -34,4 +34,6 @@ mod app_session_tests;
 #[cfg(test)]
 mod feedback_tests;
 #[cfg(test)]
+mod freshness_tests;
+#[cfg(test)]
 mod social_tests;

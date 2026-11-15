@@ -73,7 +73,7 @@ These are not configurable.
 
 | | |
 | --- | --- |
-| Cache | 24 h for perfume, brand, perfumer and note pages; 1 h for searches and rankings; none for account data |
+| Freshness | Every read asks Parfumo: no page is kept and served again, for public pages as for account data |
 | Audit log | Every tool call: tool, target, outcome, duration and number of writes really sent to Parfumo. Kept 90 days |
 | `User-Agent` | Fixed and honest; no rotating browser imitation |
 | Captcha, Cloudflare challenge | Never solved or bypassed: the tool returns `captcha_required` |
