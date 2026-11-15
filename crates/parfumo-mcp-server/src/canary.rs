@@ -516,6 +516,10 @@ pub async fn run(state: &ServerState, user: Option<&db::User>) -> Report {
         if let Some(why) = r.stop.clone() {
             r.skip("account", "account session", "account_client", &why);
         } else {
+            // The account is read through the application interface when a session of it
+            // is held, and no tool call of this user may follow: a session the site ends
+            // during the run is forgotten in the database when the run ends, not later.
+            let _stored = state.core.sessions.storing_app_session(user.id);
             match state.core.sessions.account_client(user.id).await {
                 Ok(client) => account_checks(&mut r, &client, p_id).await,
                 Err(e) => r.push("account", "account session", "account_client", Outcome::Failed, e.to_string(), None),

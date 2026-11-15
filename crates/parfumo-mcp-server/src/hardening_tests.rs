@@ -145,6 +145,38 @@ async fn the_canary_reads_the_linked_account_and_never_writes() {
     assert!(session.detail.contains("no Parfumo account is linked"));
 }
 
+/// The canary reads the account through the application interface when a session is held,
+/// and it is the only thing a dedicated canary account ever does.
+#[tokio::test]
+async fn a_session_the_site_ended_during_the_canary_is_not_sent_again_after_a_restart() {
+    let (base, site) = spawn_site().await;
+    let db = parfumo_mcp_core::db::Db::open_in_memory().unwrap();
+    let key = parfumo_mcp_core::crypto::MasterKey::generate_base64();
+    // One process of the server, on a database and a key that outlive it.
+    let start = || {
+        let key = parfumo_mcp_core::crypto::MasterKey::from_base64(&key).unwrap();
+        crate::server::state(crate::tests::test_config(&base), crate::tests::test_server_config(), db.clone(), key)
+    };
+    let user = parfumo_mcp_core::db::User { id: db.add_user("alice", "hash").unwrap(), name: "alice".into() };
+    let state = start();
+    link_account(&state.core, user.id, "alice").await;
+    let sent = |token: &str| site.app_seen.lock().unwrap().iter().filter(|(_, sent)| sent == token).count();
+
+    // The site ends the session: the canary meets the refusal, and reads the web pages.
+    site.app_live.lock().unwrap().clear();
+    let report = canary::run(&state, Some(&user)).await;
+    let nick = report.checks.iter().find(|c| c.name == "own nickname").unwrap();
+    assert_eq!(nick.outcome, Outcome::Ok, "{}", nick.detail);
+    assert_eq!(sent("app-alice-1"), 1);
+
+    // The server is started again before any tool call of that user: the refused token
+    // does not come back from the database with the cookies.
+    let report = canary::run(&start(), Some(&user)).await;
+    assert_eq!(report.checks.iter().find(|c| c.name == "own nickname").unwrap().outcome, Outcome::Ok);
+    assert_eq!(sent("app-alice-1"), 1, "the token the site refused to the canary was sent again after the restart");
+    assert_eq!(site.app_logins.load(std::sync::atomic::Ordering::SeqCst), 2, "the session is renewed instead, once");
+}
+
 #[tokio::test]
 async fn the_configured_canary_user_must_exist() {
     let (base, _mock) = spawn_mock().await;
