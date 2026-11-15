@@ -768,3 +768,388 @@ async fn a_brand_read_through_the_interface_takes_its_country_from_the_web_page_
     assert_eq!(interface, [call("/search", token), call("/brand_details", token), call("/brand_details", token)]);
     assert_eq!(web, ["/Perfumes/Creed"], "the web page is read once, without the token");
 }
+
+// ---- two processes on one database -----------------------------------------------------------
+//
+// The `canary` command run beside the running server, or two stdio servers started by two
+// MCP hosts: two processes, each with its own memory, on one database and one key. Here,
+// `w.start()` twice, and both kept.
+
+/// Two processes on the link of one account, both holding its session token in memory:
+/// the one that linked the account, and one started after it, which found the token in the
+/// database. What the stand-in was asked so far is forgotten.
+async fn two_processes(w: &World) -> (Process, Process) {
+    let a = w.start();
+    a.link_to("alice").await;
+    let b = w.start();
+    assert_eq!(b.search().await, FROM_THE_INTERFACE);
+    assert_eq!(asked(&w.site).1, [login(), call("/perfumes", "app-alice-1")]);
+    (a, b)
+}
+
+#[tokio::test]
+async fn a_token_refused_to_one_process_is_not_sent_again_by_another_on_the_same_database() {
+    let w = World::new().await;
+    let site = &w.site;
+    let (a, b) = two_processes(&w).await;
+
+    // The site ends the session. One process meets the refusal, and renews the session by
+    // one login at its next read.
+    site.app_live.lock().unwrap().clear();
+    assert_eq!(a.search().await, FROM_THE_WEB);
+    assert_eq!(a.search().await, FROM_THE_INTERFACE);
+    assert_eq!(asked(site).1, [call("/perfumes", "app-alice-1"), login(), call("/perfumes", "app-alice-2")]);
+
+    // The other one still held the refused token in memory. It does not send it again, and
+    // does not log in either: its tools of both kinds read with the token the first obtained.
+    assert_eq!(b.search().await, FROM_THE_INTERFACE);
+    assert_eq!(b.own_nick().await, "alice");
+    assert_eq!(
+        asked(site).1,
+        [call("/perfumes", "app-alice-2"), call("/auth/me", "app-alice-2")],
+        "a token the site refused to another process left again, or a second login was made"
+    );
+    // Nor did the end of its calls put its old state in the place of the new token.
+    assert_eq!(w.start().search().await, FROM_THE_INTERFACE);
+    assert_eq!(asked(site).1, [call("/perfumes", "app-alice-2")]);
+    assert_eq!(logins(site), (1, 2));
+}
+
+#[tokio::test]
+async fn a_refusal_met_by_one_process_is_stored_and_holds_for_the_other() {
+    let w = World::new().await;
+    let site = &w.site;
+    let (a, b) = two_processes(&w).await;
+
+    // The site ends the session, and the process started last is the one that finds out.
+    // Nobody replaced the token: its refusal is stored.
+    site.app_live.lock().unwrap().clear();
+    assert_eq!(b.search().await, FROM_THE_WEB);
+    assert_eq!(asked(site).1, [call("/perfumes", "app-alice-1")]);
+    assert!(w.link().app_ended, "the refusal was not stored");
+
+    // The other process held that token in memory: it does not send it. It finds a session
+    // the site ended, renews it by one login, and both read with the new one.
+    assert_eq!(a.search().await, FROM_THE_INTERFACE);
+    assert_eq!(asked(site).1, [login(), call("/perfumes", "app-alice-2")], "the token refused to the other process left again");
+    assert_eq!(b.search().await, FROM_THE_INTERFACE);
+    assert_eq!(asked(site).1, [call("/perfumes", "app-alice-2")]);
+
+    // The renewed session is lost at once. Whichever process finds out, neither logs in
+    // again before the pause is over, and the refused token leaves once.
+    site.app_live.lock().unwrap().clear();
+    for process in [&b, &a, &b, &a] {
+        assert_eq!(process.search().await, FROM_THE_WEB);
+    }
+    assert_eq!(asked(site).1, [call("/perfumes", "app-alice-2")], "one refusal for the two processes, and no login during the pause");
+    // After the pause (each process counts its own) one of them renews it, once for both.
+    a.state.sessions.end_app_backoff(w.user);
+    b.state.sessions.end_app_backoff(w.user);
+    for process in [&b, &a, &b] {
+        assert_eq!(process.search().await, FROM_THE_INTERFACE);
+    }
+    assert_eq!(asked(site).1, [vec![login()], vec![call("/perfumes", "app-alice-3"); 3]].concat());
+}
+
+#[tokio::test]
+async fn a_late_refusal_of_the_old_token_does_not_erase_the_session_another_process_renewed() {
+    let w = World::new().await;
+    let site = &w.site;
+    let (a, b) = two_processes(&w).await;
+
+    // The site ends the session. A read of one process is under way with the old token,
+    // and the refusal is slow to come. Meanwhile the other process meets the refusal as
+    // well, and renews the session.
+    site.app_live.lock().unwrap().clear();
+    site.app_delay_ms.store(300, Ordering::SeqCst);
+    let meanwhile = async {
+        while !site.app_seen.lock().unwrap().contains(&call("/perfumes", "app-alice-1")) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        site.app_delay_ms.store(0, Ordering::SeqCst);
+        assert_eq!(a.search().await, FROM_THE_WEB);
+        assert_eq!(a.search().await, FROM_THE_INTERFACE);
+    };
+    let (found, ()) = tokio::join!(b.search(), meanwhile);
+    assert_eq!(found, FROM_THE_WEB);
+    // Both requests had left before either refusal was known: that much cannot be helped.
+    assert_eq!(asked(site).1, [vec![call("/perfumes", "app-alice-1"); 2], vec![login(), call("/perfumes", "app-alice-2")]].concat());
+
+    // What the slow process had to store was the refusal of a token that is no longer the
+    // stored one: the renewed session stays in the database…
+    assert_eq!(w.start().search().await, FROM_THE_INTERFACE);
+    assert_eq!(asked(site).1, [call("/perfumes", "app-alice-2")], "a late refusal of the old token erased the renewed session");
+    // … and is the one that process reads with from now on. The session renewed a moment
+    // ago was not refused: there is no pause, and no login.
+    assert_eq!(b.search().await, FROM_THE_INTERFACE);
+    assert_eq!(b.own_nick().await, "alice");
+    assert_eq!(asked(site).1, [call("/perfumes", "app-alice-2"), call("/auth/me", "app-alice-2")]);
+    assert_eq!(logins(site), (1, 2));
+}
+
+#[tokio::test]
+async fn a_refusal_of_the_old_token_stored_by_another_process_does_not_cost_the_session_just_renewed() {
+    let w = World::new().await;
+    let site = &w.site;
+    let (a, b) = two_processes(&w).await;
+
+    // The site ends the session. A read of one process meets the refusal, then waits for a
+    // slow web site: the refusal is not stored yet when the next read of that process logs
+    // in again, to an interface slow to answer.
+    site.app_live.lock().unwrap().clear();
+    site.web_delay_ms.store(700, Ordering::SeqCst);
+    let renewing = async {
+        while a.holds_session() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        site.app_delay_ms.store(300, Ordering::SeqCst);
+        a.search().await
+    };
+    // While that login is under way, the other process meets the refusal of the old token
+    // too (asked directly, so that it does not wait for the web site), and stores it.
+    let meanwhile = async {
+        while !site.app_seen.lock().unwrap().contains(&login()) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        site.app_delay_ms.store(0, Ordering::SeqCst);
+        let account = b.state.sessions.client_for(w.user).unwrap();
+        assert_eq!(account.app_nick().await.unwrap_err(), ClientError::LoginRequired);
+        b.state.sessions.store_app_session(w.user);
+        assert!(w.link().app_ended);
+    };
+    let (first, second, ()) = tokio::join!(a.search(), renewing, meanwhile);
+    site.web_delay_ms.store(0, Ordering::SeqCst);
+    assert_eq!((first, second), (FROM_THE_WEB, FROM_THE_INTERFACE));
+    let old = "app-alice-1";
+    assert_eq!(asked(site).1, [call("/perfumes", old), login(), call("/auth/me", old), call("/perfumes", "app-alice-2")]);
+
+    // What was stored meanwhile is the end of the old session, which holds no token: the
+    // one the login obtained is stored after it, not given up for it. It serves both
+    // processes and the next one, and the renewal is not taken for one that was lost.
+    assert_eq!(a.search().await, FROM_THE_INTERFACE);
+    assert_eq!(b.search().await, FROM_THE_INTERFACE);
+    assert_eq!(w.start().search().await, FROM_THE_INTERFACE);
+    assert_eq!(asked(site).1, vec![call("/perfumes", "app-alice-2"); 3], "the session just renewed was lost to the refusal of the old one");
+    assert_eq!(logins(site), (1, 2));
+}
+
+#[tokio::test]
+async fn a_process_that_waited_for_the_web_site_takes_the_session_renewed_meanwhile_and_does_not_log_in() {
+    let w = World::new().await;
+    let site = &w.site;
+    let (a, b) = two_processes(&w).await;
+
+    // The site ends the session, and one process meets the refusal.
+    site.app_live.lock().unwrap().clear();
+    assert_eq!(a.search().await, FROM_THE_WEB);
+    asked(site);
+    // The other one checks its web session, about which the site is slow to answer. It
+    // found the session of the interface ended, and renews it once the web site answered.
+    // Meanwhile the first one renews it.
+    site.web_delay_ms.store(300, Ordering::SeqCst);
+    let meanwhile = async {
+        while site.seen.lock().unwrap().is_empty() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        a.state.sessions.open_app_session(w.user).await;
+        assert!(a.holds_session());
+    };
+    let (checked, ()) = tokio::join!(b.state.sessions.renew(w.user), meanwhile);
+    site.web_delay_ms.store(0, Ordering::SeqCst);
+    // The session is looked up again before a login is made: one login for the two.
+    assert!(checked.unwrap().has_app_session());
+    assert_eq!(asked(site).1, [login()], "a second login was made beside the one of the other process");
+    assert_eq!(b.search().await, FROM_THE_INTERFACE);
+    assert_eq!(asked(site).1, [call("/perfumes", "app-alice-2")]);
+    assert_eq!(logins(site), (1, 2));
+}
+
+#[tokio::test]
+async fn the_refusal_of_the_token_the_database_holds_is_stored_whatever_was_stored_meanwhile() {
+    let w = World::new().await;
+    let site = &w.site;
+    let (_, b) = two_processes(&w).await;
+
+    // The site ends the session. A read is under way with the token, and the refusal is
+    // slow to come. Meanwhile the session is stored once more as it is: its `app_rev`
+    // moves on, the token is the same. (Two processes of this version do not do that: it
+    // stands for whatever leaves the refused token in a session stored since.)
+    site.app_live.lock().unwrap().clear();
+    site.app_delay_ms.store(300, Ordering::SeqCst);
+    let meanwhile = async {
+        while site.app_seen.lock().unwrap().is_empty() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        site.app_delay_ms.store(0, Ordering::SeqCst);
+        let link = w.link();
+        assert!(w.db.link_store_app_session(w.user, &link.rev, link.app_rev, &link.cookies.unwrap(), false).unwrap());
+    };
+    let (found, ()) = tokio::join!(b.search(), meanwhile);
+    assert_eq!(found, FROM_THE_WEB);
+
+    // The stored session is not the one that read started from, and is not written over
+    // as such. But the token it holds is the one the site just refused: the refusal is
+    // stored in its place, and no process finds that token in the database.
+    assert!(w.link().app_ended, "a token the site refused was left in the database");
+    assert_eq!(w.start().search().await, FROM_THE_INTERFACE);
+    assert_eq!(asked(site).1, [call("/perfumes", "app-alice-1"), login(), call("/perfumes", "app-alice-2")]);
+    // The process that met the refusal reads with the session renewed since.
+    assert_eq!(b.search().await, FROM_THE_INTERFACE);
+    assert_eq!(asked(site).1, [call("/perfumes", "app-alice-2")]);
+}
+
+#[tokio::test]
+async fn a_stored_session_that_cannot_be_read_is_not_replaced_by_the_token_held_in_memory() {
+    let w = World::new().await;
+    let site = &w.site;
+    let (_, b) = two_processes(&w).await;
+
+    // Another session was stored, which this process cannot read. (This version does not
+    // write such a thing: it stands for a process started with another key.)
+    let link = w.link();
+    assert!(w.db.link_store_app_session(w.user, &link.rev, link.app_rev, b"not what the key encrypts", false).unwrap());
+    // The token held in memory is no longer the stored one, and may be one the writer saw
+    // refused: nothing is sent with it, and no login is made on top of what is not understood.
+    for _ in 0..2 {
+        assert_eq!(b.search().await, FROM_THE_WEB);
+    }
+    assert_eq!(asked(site).1, [], "a token that is no longer the stored one was sent");
+    assert!(!b.holds_session());
+}
+
+#[tokio::test]
+async fn a_database_of_version_0_2_serves_two_processes_as_a_new_one_does() {
+    let (base, site) = spawn_site().await;
+    // The tables of a link as version 0.2.3 created them, opened by this version.
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch(crate::db::SCHEMA_0_2).unwrap();
+    let db = Db::init(conn).unwrap();
+    let user = db.add_user("someone", "hash").unwrap();
+    let w = World { base, site, db, key: MasterKey::generate_base64(), user };
+    let site = &w.site;
+
+    let (a, b) = two_processes(&w).await;
+    assert_eq!(w.link().app_rev, 1, "the session obtained with the link is the first one stored");
+    // One process meets the refusal and renews the session: two more are stored. The other
+    // one reads with the token of the last, and stores nothing.
+    site.app_live.lock().unwrap().clear();
+    assert_eq!(a.search().await, FROM_THE_WEB);
+    assert_eq!(a.search().await, FROM_THE_INTERFACE);
+    assert_eq!(w.link().app_rev, 3);
+    assert_eq!(b.search().await, FROM_THE_INTERFACE);
+    let renewed = call("/perfumes", "app-alice-2");
+    assert_eq!(asked(site).1, [call("/perfumes", "app-alice-1"), login(), renewed.clone(), renewed]);
+    assert_eq!(w.link().app_rev, 3);
+
+    // Linking the account again starts from zero, for the process that did not link it too.
+    b.link_to("alice").await;
+    assert_eq!(w.link().app_rev, 1);
+    assert_eq!(a.search().await, FROM_THE_INTERFACE);
+    assert_eq!(asked(site).1, [login(), call("/perfumes", "app-alice-3")]);
+    assert_eq!(w.link().app_rev, 1);
+}
+
+#[tokio::test]
+async fn a_new_login_to_the_web_site_does_not_store_a_token_another_process_replaced_meanwhile() {
+    let w = World::new().await;
+    let site = &w.site;
+    let (a, b) = two_processes(&w).await;
+
+    // The web session expires, and the site ends the session of the application interface.
+    // One process logs in to the web site again, which is slow to answer. Meanwhile the
+    // other one meets the refusal of the token and renews the session (asked directly, so
+    // that it does not wait for the web site).
+    site.expire_sessions();
+    site.app_live.lock().unwrap().clear();
+    site.web_delay_ms.store(300, Ordering::SeqCst);
+    let meanwhile = async {
+        while site.seen.lock().unwrap().is_empty() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        let account = a.state.sessions.client_for(w.user).unwrap();
+        assert_eq!(account.app_nick().await.unwrap_err(), ClientError::LoginRequired);
+        a.state.sessions.store_app_session(w.user);
+        a.state.sessions.open_app_session(w.user).await;
+        assert!(account.has_app_session());
+    };
+    let (renewed, ()) = tokio::join!(b.state.sessions.renew(w.user), meanwhile);
+    renewed.unwrap();
+    site.web_delay_ms.store(0, Ordering::SeqCst);
+    assert_eq!(logins(site), (2, 2));
+    assert_eq!(asked(site).1, [call("/auth/me", "app-alice-1"), login()]);
+
+    // The cookies of the new web session are stored with the token of the renewed session,
+    // not with the refused one that process held when its login started.
+    assert_eq!(w.start().search().await, FROM_THE_INTERFACE);
+    assert_eq!(b.search().await, FROM_THE_INTERFACE);
+    assert_eq!(asked(site).1, vec![call("/perfumes", "app-alice-2"); 2], "the new web session was stored with the token of before the renewal");
+    assert_eq!(logins(site), (2, 2));
+}
+
+/// Calls of the two processes made together on several threads, public reads and checks
+/// of the account, while the site ends the sessions of both kinds again and again: the
+/// stored session is read and written from both sides in whatever order the threads come.
+/// Every call ends (none is left waiting for a lock), and once it is quiet the two
+/// processes and a new one read with one and the same token, the stored one.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn calls_of_two_processes_made_together_all_end_and_leave_one_session_for_both() {
+    let w = World::new().await;
+    let site = w.site.clone();
+    let (a, b) = two_processes(&w).await;
+    let (a, b) = (std::sync::Arc::new(a), std::sync::Arc::new(b));
+    fn end_pauses(process: &Process) {
+        process.state.sessions.end_app_backoff(process.user.id);
+        process.state.sessions.end_backoff(process.user.id);
+    }
+
+    let mut calls = Vec::new();
+    for n in 0..8 {
+        let process = if n % 2 == 0 { a.clone() } else { b.clone() };
+        calls.push(tokio::spawn(async move {
+            for _ in 0..40 {
+                process.search().await;
+                if n % 4 < 2 {
+                    let _ = process.state.sessions.renew(process.user.id).await;
+                }
+            }
+        }));
+    }
+    let the_site = {
+        let (site, a, b) = (site.clone(), a.clone(), b.clone());
+        tokio::spawn(async move {
+            for round in 0..20 {
+                tokio::time::sleep(Duration::from_millis(30)).await;
+                site.app_live.lock().unwrap().clear();
+                if round % 3 == 0 {
+                    site.expire_sessions();
+                }
+                // Time cannot be advanced: the pauses are ended, so that logins go on.
+                end_pauses(&a);
+                end_pauses(&b);
+            }
+        })
+    };
+    let all = async {
+        for call in calls {
+            call.await.unwrap();
+        }
+        the_site.await.unwrap();
+    };
+    tokio::time::timeout(Duration::from_secs(90), all).await.expect("calls of the two processes never ended");
+
+    // Quiet again. Whatever each process was left with, a few reads settle it.
+    end_pauses(&a);
+    end_pauses(&b);
+    for process in [&a, &b, &a, &b] {
+        process.search().await;
+    }
+    let before = logins(&site);
+    asked(&site);
+    assert_eq!(a.search().await, FROM_THE_INTERFACE);
+    assert_eq!(b.search().await, FROM_THE_INTERFACE);
+    assert_eq!(w.start().search().await, FROM_THE_INTERFACE);
+    let (_, interface) = asked(&site);
+    assert_eq!(interface.len(), 3, "{interface:?}");
+    assert!(interface.iter().all(|call| call == &interface[0]), "the processes do not read with the same token: {interface:?}");
+    assert_eq!(logins(&site), before, "the stored session was not the one in use");
+}
