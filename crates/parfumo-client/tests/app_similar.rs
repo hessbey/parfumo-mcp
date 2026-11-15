@@ -46,6 +46,10 @@ struct Site {
     layer: Mutex<String>,
     /// Whether every number has a record, or 9438 alone.
     every_record: AtomicBool,
+    /// What the record of 225233 (`Creed/absolu-aventus`) answers under status 200, instead of a 404.
+    record: Mutex<Option<String>>,
+    /// Whether `type=similar` answers 404.
+    similar_gone: AtomicBool,
     /// Whether a page of the web site was asked with the session token.
     token_on_web: AtomicBool,
     /// What happens to the interface once the list of similar perfumes was served, in the
@@ -113,12 +117,13 @@ async fn handler(State(site): State<Arc<Site>>, uri: Uri, headers: HeaderMap, _b
     match uri.path() {
         "/app/v1/similar" if asked.contains("type=similar") => {
             site.cut.store(*site.after_list.lock().unwrap() != AfterList::Served, Ordering::SeqCst);
-            json(&site.similar.lock().unwrap())
+            if site.similar_gone.load(Ordering::SeqCst) { not_found() } else { json(&site.similar.lock().unwrap()) }
         }
         "/app/v1/similar" if asked.contains("type=layer") => json(&site.layer.lock().unwrap()),
         "/app/v1/search" => json(SEARCH_CREED),
         "/app/v1/perfumes" => json(PERFUMES_BRAND),
         "/app/v1/perfume_details/9438" => json(PERFUME_DETAILS),
+        "/app/v1/perfume_details/225233" if site.record.lock().unwrap().is_some() => json(site.record.lock().unwrap().as_deref().unwrap_or_default()),
         path if path.starts_with("/app/v1/perfume_details/") && site.every_record.load(Ordering::SeqCst) => {
             json(&record_of(path.trim_start_matches("/app/v1/perfume_details/")))
         }
@@ -133,6 +138,8 @@ async fn anonymous() -> (ParfumoClient, Arc<Site>) {
         similar: Mutex::new(SIMILAR_LIST.to_string()),
         layer: Mutex::new(two_rows()),
         every_record: AtomicBool::new(false),
+        record: Mutex::default(),
+        similar_gone: AtomicBool::new(false),
         token_on_web: AtomicBool::new(false),
         after_list: Mutex::new(AfterList::Served),
         cut: AtomicBool::new(false),
@@ -157,6 +164,20 @@ async fn logged_in() -> (ParfumoClient, Arc<Site>) {
     client.app_login("someone@example.org", "pw").await.unwrap();
     site.asked.lock().unwrap().clear();
     (client, site)
+}
+
+/// A client logged in, that read the listing of Creed: `Creed/absolu-aventus` is then
+/// known as number 225233, and its web page is the one the fake serves.
+async fn knowing_absolu_aventus() -> (ParfumoClient, Arc<Site>) {
+    let (c, site) = logged_in().await;
+    c.search_perfumes(&SearchQuery { brand: Some("creed".into()), ..SearchQuery::default() }, 1).await.unwrap();
+    site.asked.lock().unwrap().clear();
+    (c, site)
+}
+
+/// What was asked since the last look.
+fn asked(site: &Site) -> Vec<String> {
+    std::mem::take(&mut *site.asked.lock().unwrap())
 }
 
 /// The lists of Sauvage as the HTML code reads them from the pages of the web site.
@@ -426,4 +447,76 @@ async fn an_answer_that_is_not_the_list_of_similar_perfumes_is_an_error() {
     // A list without the mark of success is not read either, as in the application.
     *site.similar.lock().unwrap() = SIMILAR_LIST.replacen(r#""status": "success""#, r#""status": "error""#, 1);
     assert!(matches!(c.get_similar_perfumes("9438").await, Err(ClientError::ParserOutdated(_))));
+}
+
+/// The record of the perfume itself, read for its name when the dupes are asked for.
+const OWN_RECORD: &str = "/app/v1/perfume_details/225233";
+/// Not recorded: a refusal worded in JSON under status 200 that says nothing of the perfume.
+const BUSY: &str = r#"{"status":"error","message":"Service temporarily unavailable"}"#;
+
+#[tokio::test]
+async fn a_perfume_with_a_web_page_whose_record_the_interface_does_not_give_is_left_to_the_web_site() {
+    // What the web site is asked about the perfume: the page of Sauvage stands in for its own.
+    let web = ["/Perfumes/Creed/absolu-aventus", "/action/perfume/get_similar.php", "/action/perfume/_get_dupes.php?q=Sauvage"];
+    let read = [&[OWN_RECORD][..], &web[..]].concat();
+
+    // The interface has nothing under the number a listing gave (a perfume merged or
+    // removed since): the fake answers 404. The web site knows the address.
+    let (c, site) = knowing_absolu_aventus().await;
+    let found = c.get_similar_perfumes_with("Creed/absolu-aventus", options(0, false, true)).await.unwrap();
+    assert_eq!(asked(&site), read);
+    assert_web_answer(&found);
+    // The number is forgotten: the next read looks the perfume up afresh.
+    let _ = c.get_similar_perfumes_with("Creed/absolu-aventus", options(0, false, true)).await;
+    assert_eq!(asked(&site)[0], "/app/v1/search?filter=Creed");
+
+    // A refusal about something else: the web site answers as well, and the number is
+    // kept, since nothing says that it is not the number of the perfume any more.
+    let (c, site) = knowing_absolu_aventus().await;
+    *site.record.lock().unwrap() = Some(BUSY.into());
+    for _ in 0..2 {
+        let found = c.get_similar_perfumes_with("Creed/absolu-aventus", options(0, false, true)).await.unwrap();
+        assert_eq!(asked(&site), read);
+        assert_web_answer(&found);
+    }
+    assert!(c.has_app_session(), "none of this is a refusal of the session");
+    assert!(!site.token_on_web.load(Ordering::SeqCst), "the session token is for the application interface only");
+
+    // A bare number has no web page behind it: what the interface answers is reported.
+    let err = c.get_similar_perfumes("225233").await.unwrap_err();
+    assert_eq!(err, ClientError::Upstream("/app/v1/perfume_details/225233 was refused: Service temporarily unavailable".into()));
+    *site.record.lock().unwrap() = None;
+    assert_eq!(c.get_similar_perfumes("225233").await.unwrap_err(), ClientError::NotFound("/perfume_details/225233".into()));
+    assert!(asked(&site).iter().all(|a| a == OWN_RECORD), "and no web page is asked");
+}
+
+#[tokio::test]
+async fn a_list_the_interface_does_not_give_for_a_perfume_with_a_web_page_is_left_to_the_web_site() {
+    let list = "/app/v1/similar?action=list&type=similar&p_id=225233&limit=30";
+    let read = [list, "/Perfumes/Creed/absolu-aventus", "/action/perfume/get_similar.php"];
+    let assert_list_of_the_web_site = |found: &SimilarPerfumes| {
+        assert_eq!((found.perfume_id.as_str(), found.similar.len(), found.similar[0].p_id), ("Dior/Sauvage_Eau_de_Toilette", 30, 102281));
+        assert!(found.warnings.is_empty(), "{:?}", found.warnings);
+    };
+
+    // Not recorded: a 404 on the list of a perfume the interface listed.
+    let (c, site) = knowing_absolu_aventus().await;
+    site.similar_gone.store(true, Ordering::SeqCst);
+    let found = c.get_similar_perfumes_with("Creed/absolu-aventus", options(0, false, false)).await.unwrap();
+    assert_eq!(asked(&site), read);
+    assert_list_of_the_web_site(&found);
+    // A bare number has no web page behind it: the 404 is reported.
+    let err = c.get_similar_perfumes_with("225233", options(0, false, false)).await.unwrap_err();
+    assert_eq!(err, ClientError::NotFound("/similar".into()));
+    assert_eq!(asked(&site), [list]);
+
+    // An error object under status 200, which a bare number reports as well
+    // (`an_answer_that_is_not_the_list_of_similar_perfumes_is_an_error`).
+    let (c, site) = knowing_absolu_aventus().await;
+    *site.similar.lock().unwrap() = BUSY.into();
+    let found = c.get_similar_perfumes_with("Creed/absolu-aventus", options(0, false, false)).await.unwrap();
+    assert_eq!(asked(&site), read);
+    assert_list_of_the_web_site(&found);
+    assert!(c.has_app_session(), "none of this is a refusal of the session");
+    assert!(!site.token_on_web.load(Ordering::SeqCst), "the session token is for the application interface only");
 }

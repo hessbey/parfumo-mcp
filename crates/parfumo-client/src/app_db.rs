@@ -154,6 +154,12 @@ fn no_record(p_id: u64, why: Unserved) -> ClientError {
     }
 }
 
+/// Whether a reference to a perfume is its bare number: the one reference that has no web
+/// page behind it, so that what the interface answers about it is the last word.
+pub(crate) fn is_bare_number(reference: &str) -> bool {
+    reference.trim().chars().all(|c| c.is_ascii_digit())
+}
+
 /// Adds to a memory of identifiers that must stay bounded: once full it is emptied, and
 /// what is needed again is looked up again.
 pub(crate) fn remember<K: Eq + Hash, V>(memory: &mut HashMap<K, V>, cap: usize, key: K, value: V) {
@@ -421,9 +427,15 @@ impl ParfumoClient {
     /// alone tells whether it exists, and a refusal about something else is reported as one.
     pub(crate) async fn app_perfume_record(&self, reference: &str) -> Result<Option<PerfumeDetails>, ClientError> {
         let Some(p_id) = self.app_perfume_number(reference).await? else { return Ok(None) };
+        self.app_perfume_record_under(reference, p_id).await
+    }
+
+    /// [`Self::app_perfume_record`] for a reference whose number (`p_id`) was already
+    /// looked up: the lookup is not made twice.
+    pub(crate) async fn app_perfume_record_under(&self, reference: &str, p_id: u64) -> Result<Option<PerfumeDetails>, ClientError> {
         match self.app_perfume_by_number(p_id).await? {
             Ok(record) => Ok(Some(record)),
-            Err(why) if reference.trim().chars().all(|c| c.is_ascii_digit()) => Err(no_record(p_id, why)),
+            Err(why) if is_bare_number(reference) => Err(no_record(p_id, why)),
             Err(Unserved::Absent) => {
                 self.t.perfume_ids.lock().unwrap_or_else(|e| e.into_inner()).retain(|_, (number, _)| *number != p_id);
                 Ok(None)
