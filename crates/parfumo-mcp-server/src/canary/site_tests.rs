@@ -24,7 +24,7 @@ use parfumo_mcp_core::{
     db::User,
     testing::{
         link_account,
-        site::{Site, spawn_site},
+        site::{BLOCK_PAGE, Site, spawn_site},
         test_config,
     },
 };
@@ -78,6 +78,16 @@ type AfterMemberCall = Box<dyn FnMut(&Asked) + Send>;
 /// a read of the interface: the read that asked for the page is not over until then.
 type BeforeCompletingPage = Box<dyn FnMut() -> Pin<Box<dyn Future<Output = ()> + Send>> + Send>;
 
+/// The ways the application interface asks to wait.
+#[derive(Clone, Copy)]
+enum Wait {
+    /// The page by which the site tells that it blocks the address.
+    BlockPage,
+    /// A 429 that asks for two minutes: more than the client waits before it tries a call
+    /// again, so the call is sent once.
+    RateLimit,
+}
+
 /// What a page that completes a read of the interface answers in place of its recorded page.
 #[derive(Clone, Copy)]
 struct PageTrouble {
@@ -110,6 +120,9 @@ struct Parfumo {
     /// the interface leaves both to the panels of the web site.
     own_reads_for_the_web_panels: Arc<AtomicBool>,
     after_member_call: Arc<Mutex<Option<AfterMemberCall>>>,
+    /// The interface asks to wait, this way, at every call made as a member whose address
+    /// holds this text.
+    wait_at: Arc<Mutex<Option<(&'static str, Wait)>>>,
     /// What one completing page answers once a call was made as a member: the `public`
     /// area, which reads the same pages before, gets the recorded ones.
     page_trouble: Arc<Mutex<Option<PageTrouble>>>,
@@ -148,6 +161,10 @@ impl Parfumo {
                 site.app_live.lock().unwrap().clear();
             }
         });
+    }
+
+    fn wait_at(&self, call: &'static str, wait: Wait) {
+        *self.wait_at.lock().unwrap() = Some((call, wait));
     }
 
     fn page_trouble(&self, page: &'static str, status: StatusCode, body: &'static str) {
@@ -204,6 +221,17 @@ fn with_value(answer: String, recorded: &str, value: &str) -> String {
 /// nothing without a live token.
 fn interface(parfumo: &Parfumo, call: &str, query: &str, bearer: Option<&str>) -> Response {
     let json = |status: StatusCode, text: String| (status, [(header::CONTENT_TYPE, "application/json")], text).into_response();
+    let wait = parfumo.wait_at.lock().unwrap().filter(|(at, _)| format!("{call}?{query}").contains(at));
+    match wait {
+        Some((_, Wait::BlockPage)) => return (StatusCode::NOT_FOUND, Html(BLOCK_PAGE)).into_response(),
+        // Not recorded: the interface was never seen to answer 429. The body has the shape
+        // of its other refusals.
+        Some((_, Wait::RateLimit)) => {
+            let headers = [(header::CONTENT_TYPE, "application/json"), (header::RETRY_AFTER, "120")];
+            return (StatusCode::TOO_MANY_REQUESTS, headers, "{\"status\":\"error\",\"message\":\"Too many requests\"}").into_response();
+        }
+        None => {}
+    }
     if !bearer.is_some_and(|token| parfumo.site.app_live.lock().unwrap().contains_key(token)) {
         return json(StatusCode::UNAUTHORIZED, "{\"status\":\"error\",\"message\":\"Authorization header required\"}".into());
     }
@@ -313,6 +341,7 @@ async fn stand_in(user_min_interval: Duration) -> (TestApp, Parfumo, User) {
         brand_on_the_web_only: Arc::default(),
         own_reads_for_the_web_panels: Arc::default(),
         after_member_call: Arc::default(),
+        wait_at: Arc::default(),
         page_trouble: Arc::default(),
         before_completing_page: Arc::default(),
     };
@@ -713,6 +742,101 @@ async fn a_read_during_which_the_account_dropped_its_session_is_not_judged() {
     // Nothing was refused, and nothing is asked of the interface after the drop.
     assert!(!asked.iter().any(|a| a.refused()));
     assert!(!asked[dropped + 1..].iter().any(|a| a.call().is_some()), "{:?}", &asked[dropped + 1..]);
+}
+
+/// What a run that the application interface told to wait at `at` looks like: that check
+/// failed, and nothing was read after it, in this area or with the account.
+fn assert_stopped_by_a_wait(report: &Report, at: &str, cause: &str) {
+    let checks = area(report, INTERFACE);
+    let stopped = NAMES.iter().position(|name| *name == at).unwrap();
+    let mut expected: Vec<(&str, Outcome)> = NAMES[..stopped].iter().map(|name| (*name, Outcome::Ok)).collect();
+    expected.push((at, Outcome::Failed));
+    expected.extend(NAMES[stopped + 1..].iter().map(|name| (*name, Outcome::Skipped)));
+    assert_eq!(outcomes(&checks), expected, "{}", report.text());
+    let failed = checks[stopped];
+    assert!(failed.detail.contains("the application interface asks to wait") && failed.detail.contains(cause), "{}", failed.detail);
+    let why = format!("run stopped after `{at}`: the application interface asks to wait");
+    for c in &checks[stopped + 1..] {
+        // The page of the perfumer has a reason of its own: the record that names it.
+        let why = if c.name == "perfumer" { "needs the perfumer of the `perfume` check" } else { why.as_str() };
+        assert_eq!(c.detail, why, "{}", c.name);
+    }
+    // The account is not read either: one line, as after any stop.
+    let account = area(report, "account");
+    assert_eq!(outcomes(&account), [("account session", Outcome::Skipped)], "{}", report.text());
+    assert_eq!(account[0].detail, why);
+    assert_eq!(interface_verdict(report), "inconclusive", "a request to wait is not a changed structure");
+    assert!(report.problems().iter().any(|c| c.area == INTERFACE && c.name == at), "it is in the alert");
+    let stored = serde_json::to_string(report).unwrap() + &report.text();
+    assert!(!stored.contains("app-alice") && !stored.contains("pw-alice"), "the report must hold no secret");
+}
+
+/// The interface answers a call made as a member by the page that tells of a block. The
+/// client reads the web site instead, as it does for a tool, and reads it well: that says
+/// nothing of the interface, and every further check would be answered the same way.
+#[tokio::test]
+async fn the_block_page_at_a_call_made_as_a_member_stops_the_run() {
+    let (app, parfumo, user) = linked_stand_in().await;
+    parfumo.wait_at(SEARCH_CALL, Wait::BlockPage);
+    let report = run(&app.state, Some(&user)).await;
+
+    assert_stopped_by_a_wait(&report, "search", "the site blocks the address of this server");
+    let asked = parfumo.asked();
+    let met = asked.iter().position(|a| a.member_call() && a.target.contains(SEARCH_CALL)).unwrap();
+    assert_eq!(asked[met].status, 404, "{:?}", asked[met]);
+    // The web site answered the search in place of the interface, within the same read.
+    // Nothing is sent after it: no call, no login, no page of the account.
+    let after: Vec<(&str, u16)> = asked[met + 1..].iter().map(|a| (a.path(), a.status)).collect();
+    assert_eq!(after, [("/s_perfumes_x.php", 200)]);
+    // A block is not a refusal: the account keeps its token.
+    assert!(app.state.core.sessions.client_for(user.id).unwrap().has_app_session());
+}
+
+/// The interface answers 429 to a read the client then leaves to a panel of the web site,
+/// which wants the account: without the stop, that would read as a check that does not
+/// apply to the account.
+#[tokio::test]
+async fn a_429_at_a_call_made_as_a_member_stops_the_run() {
+    let (app, parfumo, user) = linked_stand_in().await;
+    parfumo.wait_at("/rating", Wait::RateLimit);
+    let report = run(&app.state, Some(&user)).await;
+
+    assert_stopped_by_a_wait(&report, "own rating", "it rate limited a call");
+    let asked = parfumo.asked();
+    // The call was sent once, and the address is not blocked: nothing but the stop keeps
+    // the next check from sending its own.
+    let limited: Vec<usize> = asked.iter().enumerate().filter(|(_, a)| a.call() == Some("/rating")).map(|(i, _)| i).collect();
+    assert_eq!(limited.len(), 1, "{:?}", asked.iter().filter(|a| a.call().is_some()).collect::<Vec<_>>());
+    assert_eq!(asked[limited[0]].status, 429);
+    assert!(!app.state.core.sessions.client_for(user.id).unwrap().app_blocked());
+    // The client asked the panel of the web site in place of the interface, without the
+    // session of the account. Nothing is sent after that read.
+    let after: Vec<&Asked> = asked[limited[0] + 1..].iter().collect();
+    assert!(after.iter().any(|a| a.path() == RATE_PANEL), "{after:?}");
+    assert!(after.iter().all(|a| ["/api/alive", RATE_PANEL].contains(&a.path()) && a.cookie.is_empty() && a.bearer.is_none()), "{after:?}");
+}
+
+/// The process already knows that the site blocks its address when the area starts: a call
+/// of another client met the block page a moment ago. Nothing is asked of the interface,
+/// and no read is made on the web site under its name.
+#[tokio::test]
+async fn a_block_known_when_the_area_starts_stops_the_run_before_anything_is_asked() {
+    let (app, parfumo, user) = linked_stand_in().await;
+    let account = app.state.core.sessions.client_for(user.id).unwrap();
+    parfumo.wait_at("/auth/me", Wait::BlockPage);
+    assert!(matches!(account.app_nick().await, Err(ClientError::RateLimited { .. })));
+    assert!(account.app_blocked() && account.has_app_session());
+    // The site would answer again: the canary does not ask to find out.
+    *parfumo.wait_at.lock().unwrap() = None;
+    parfumo.forget_asked();
+    let report = run(&app.state, Some(&user)).await;
+
+    assert_stopped_by_a_wait(&report, "own nickname", "the site blocks the address of this server");
+    let asked = parfumo.asked();
+    assert!(!asked.iter().any(|a| a.call().is_some()), "{:?}", asked.iter().filter(|a| a.call().is_some()).collect::<Vec<_>>());
+    // The page the nickname is read on when the interface does not answer, and every page
+    // of the account, are asked with or for a session: none was.
+    assert!(!asked.iter().any(|a| a.path().starts_with("/account/") || !a.cookie.is_empty()), "{asked:?}");
 }
 
 /// The interface answers the record of the perfume; the web page that completes it asks

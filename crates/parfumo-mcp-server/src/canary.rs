@@ -14,7 +14,8 @@
 //!   canary account, as for every user whose account is linked. Nothing is asked of the
 //!   interface without a token: an account linked by the cookie of a browser has none, and
 //!   the area then does not apply to it. A token the interface refuses is a failed check and
-//!   is not sent again; the area goes on only if the account obtains another, once;
+//!   is not sent again; the area goes on only if the account obtains another, once. An
+//!   interface that asks to wait (its block page, a 429) stops the run, as the web site does;
 //! - `account`: the pages of the canary account on the web site, by a client that holds
 //!   the web session of the account and no token, so that the nickname, the rating panel
 //!   and the classification panel are read on the web site too.
@@ -147,7 +148,8 @@ pub use parfumo_mcp_core::audit::db_time;
 #[derive(Default)]
 struct Runner {
     checks: Vec<Check>,
-    /// Set by a captcha or a rate limit: nothing more is sent.
+    /// Set by a captcha or a rate limit, of the web site or of the application interface:
+    /// nothing more is sent.
     stop: Option<String>,
     /// Set when the account session is unusable: the account checks are skipped.
     account_stop: Option<String>,
@@ -239,10 +241,13 @@ impl Runner {
     /// cookie of the account and is lent its session token for the time of the read.
     ///
     /// The client reads the web site instead whenever the interface does not serve a read,
-    /// and after the interface refused the token (which the client then forgets). Neither
-    /// may pass for an answer of the interface: `expect` looks for what only the interface
-    /// fills, and what became of the session while the read ran is told by what the client
-    /// counts, read before and after it.
+    /// after the interface refused the token (which the client then forgets), and when the
+    /// interface asks to wait. None of these may pass for an answer of the interface:
+    /// `expect` looks for what only the interface fills, and what became of the session
+    /// while the read ran is told by what the client counts, read before and after it.
+    ///
+    /// An interface that asks to wait (its block page, a 429) stops the run, like a rate
+    /// limit of the web site: see [`Self::interface_asks_to_wait`].
     ///
     /// A refusal is one failed check, and the refused token is not sent again: the account
     /// forgets it too. The next read is lent whatever the account holds then. That is a new
@@ -273,10 +278,17 @@ impl Runner {
         }
         let c = &lent.client;
         let held = lent.lend().await;
+        // A block known before the read, from an earlier call of any user of the process or
+        // from the login just made: the read would go to the web site under the name of the
+        // interface.
+        if c.app_blocked() {
+            self.interface_asks_to_wait(name, function, true, None);
+            return None;
+        }
         // Events are counted, where a state would be read too late: a tool call of the same
         // user that logs in again before this read is over leaves no trace of the refusal
         // in the state of the session.
-        let (refusals, generation) = (c.app_session_refusals(), c.app_session_generation());
+        let (refusals, generation, waits) = (c.app_session_refusals(), c.app_session_generation(), c.app_waits());
         // The token is looked for again once the counts are read: one refused or dropped
         // from here on is counted, and one that went between the two is not lent. Without a
         // token the read would go to the web site under the name of the interface.
@@ -299,6 +311,11 @@ impl Runner {
         let refused = c.app_session_refusals() != refusals;
         let dropped = c.app_session_generation() != generation;
         lent.give_back();
+        let blocked = c.app_blocked();
+        if blocked || c.app_waits() != waits {
+            self.interface_asks_to_wait(name, function, blocked, Some(started));
+            return None;
+        }
         if refused {
             match &self.refused_at {
                 None => self.refused_at = Some(name.to_string()),
@@ -318,7 +335,8 @@ impl Runner {
                 Ok(_) => false,
             };
         match answer {
-            // A captcha or a rate limit stops the whole run, whichever side met it.
+            // A captcha or a rate limit of the web site stops the whole run as well, on the
+            // page that completes the read or on the one read in place of the interface.
             Err(e @ (ClientError::CaptchaRequired | ClientError::RateLimited { .. })) => self.judge(A, name, function, Err(e), expect, started),
             // Whatever came back was read from the web site, or is its error: it says
             // nothing of the interface.
@@ -357,6 +375,21 @@ impl Runner {
             }
             answer => self.judge(A, name, function, answer, expect, started),
         }
+    }
+
+    /// The application interface asks to wait: the site blocks the address of the process
+    /// (`blocked`), or a call was rate limited. The client hands such a read over to the web
+    /// site, whose answer says nothing of the interface and is not judged. The check is
+    /// failed and the run stops, as it does on a rate limit of the web site: every further
+    /// check would send its calls, and their retries, to an interface that asked for none.
+    fn interface_asks_to_wait(&mut self, name: &str, function: &str, blocked: bool, started: Option<Instant>) {
+        let cause = if blocked { "the site blocks the address of this server" } else { "it rate limited a call" };
+        let detail = format!(
+            "the application interface asks to wait ({cause}): what the web site answers in its place is not judged, and nothing more is sent in \
+             this run"
+        );
+        self.push(INTERFACE, name, function, Outcome::Failed, detail, started);
+        self.stop = Some(format!("run stopped after `{name}`: the application interface asks to wait"));
     }
 
     /// Records the outcome of one read from its answer. Returns the value when the check passed.
