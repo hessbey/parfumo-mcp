@@ -52,6 +52,8 @@ struct Site {
     details: String,
     /// Whether the session token is refused from now on.
     refuse: AtomicBool,
+    /// What the web page of the recorded brand answers instead of the page: a status and a body.
+    web: Mutex<Option<(u16, &'static str)>>,
 }
 
 impl Site {
@@ -72,7 +74,8 @@ async fn handler(State(site): State<Arc<Site>>, uri: Uri, headers: HeaderMap, _b
     // The fake has one web page, the one of the recorded brand: whatever else is left to
     // the web site is not found there.
     if uri.path() == WEB_PAGE_OF_CREED {
-        return (StatusCode::OK, [(header::CONTENT_TYPE, "text/html; charset=utf-8")], BRAND_PAGE).into_response();
+        let (status, page) = site.web.lock().unwrap().unwrap_or((200, BRAND_PAGE));
+        return (StatusCode::from_u16(status).unwrap(), [(header::CONTENT_TYPE, "text/html; charset=utf-8")], page).into_response();
     }
     if !uri.path().starts_with("/app/v1/") {
         return (StatusCode::NOT_FOUND, "<html><body>Not found</body></html>").into_response();
@@ -108,7 +111,7 @@ async fn handler(State(site): State<Arc<Site>>, uri: Uri, headers: HeaderMap, _b
 
 /// A client of a fake site whose `/brand_details` answers `details`.
 async fn client_of(details: &str) -> (ParfumoClient, Arc<Site>) {
-    let site = Arc::new(Site { asked: Mutex::new(Vec::new()), details: details.to_string(), refuse: AtomicBool::new(false) });
+    let site = Arc::new(Site { asked: Mutex::new(Vec::new()), details: details.to_string(), refuse: AtomicBool::new(false), web: Mutex::new(None) });
     let app = Router::new().fallback(handler).with_state(site.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
@@ -375,6 +378,40 @@ async fn a_brand_whose_web_page_cannot_be_read_is_given_without_what_the_page_sh
     let b = c.get_brand("Creed", 1).await.unwrap();
     assert_eq!((b.country, b.founded), (None, Some(1760)));
     assert_eq!(b.warnings, ["country unavailable: not found: /Perfumes/Elsewhere"]);
+}
+
+/// The error of the page that completes a brand is handed back as it is to who asks for
+/// it, not as the words of the warning: a page that changed is told from a site that asks
+/// to stop or cannot be reached.
+#[tokio::test]
+async fn the_error_of_the_page_that_completes_a_brand_is_handed_back_beside_the_warning() {
+    let (c, site) = logged_in().await;
+    let read = c.get_brand_completed("Creed", 1).await.unwrap();
+    assert_eq!((read.value.country.as_deref(), read.value.founded, read.web_error), (Some("France"), Some(1946), None), "the page was read");
+
+    // A page that does not exist, a rate limit, an outage, and a human verification (the
+    // page of Cloudflare, by its title).
+    let challenge = "<html><head><title>Just a moment...</title></head></html>";
+    for (answer, error) in [
+        ((404, "<html><body>Not found</body></html>"), ClientError::NotFound(WEB_PAGE_OF_CREED.into())),
+        ((429, ""), ClientError::RateLimited { retry_after_secs: None }),
+        ((503, ""), ClientError::Upstream(format!("HTTP 503 on {WEB_PAGE_OF_CREED}"))),
+        ((403, challenge), ClientError::CaptchaRequired),
+    ] {
+        *site.web.lock().unwrap() = Some(answer);
+        let read = c.get_brand_completed("Creed", 1).await.unwrap();
+        assert_eq!(read.web_error.as_ref(), Some(&error));
+        assert_eq!((read.value.country.as_deref(), read.value.perfumes.items.len()), (None, 5));
+        assert_eq!(read.value.warnings, [format!("country and founding year unavailable: {error}")]);
+        assert_eq!(c.get_brand("Creed", 1).await.unwrap(), read.value, "the tools get the same answer, with the same warning");
+    }
+
+    // Without a session the web page is the read itself: its failure is the error of the read.
+    c.forget_app_session();
+    assert_eq!(c.get_brand_completed("Creed", 1).await.unwrap_err(), ClientError::CaptchaRequired);
+    *site.web.lock().unwrap() = None;
+    let read = c.get_brand_completed("Creed", 1).await.unwrap();
+    assert_eq!((read.value.brand.id.as_str(), read.web_error), ("Dior", None), "the page the fake serves for Creed");
 }
 
 /// The rows of a page, for a listing read in one go after its first page: the web page,

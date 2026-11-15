@@ -614,6 +614,47 @@ async fn a_perfume_named_by_its_id_is_found_through_its_brand_then_remembered() 
     assert!(site.take().is_empty());
 }
 
+/// The rank label is read on the web page of the perfume. When that page cannot be read,
+/// the record of the interface is given all the same and says what it lacks; the error of
+/// the page is handed back as it is to who asks for it, not as the words of the warning.
+#[tokio::test]
+async fn the_error_of_the_page_that_completes_a_record_is_handed_back_beside_the_warning() {
+    let (c, site) = logged_in().await;
+    let page = "/Perfumes/Creed/aventus";
+    let read = c.get_perfume_completed("9438").await.unwrap();
+    assert_eq!(site.take(), ["/app/v1/perfume_details/9438", page]);
+    assert_eq!((read.value.ranking.as_deref(), read.web_error), (Some("Ranked 30 in Men's Perfume"), None), "the page was read");
+    assert!(read.value.warnings.is_empty(), "{:?}", read.value.warnings);
+
+    // A page that does not exist, a rate limit, an outage, and a human verification (the
+    // page of Cloudflare, by its title).
+    let challenge = "<html><head><title>Just a moment...</title></head></html>";
+    for (answer, error) in [
+        ((404, "<html><body>Not found</body></html>"), ClientError::NotFound(page.into())),
+        ((429, ""), ClientError::RateLimited { retry_after_secs: None }),
+        ((503, ""), ClientError::Upstream(format!("HTTP 503 on {page}"))),
+        ((403, challenge), ClientError::CaptchaRequired),
+    ] {
+        site.web.lock().unwrap().insert(page, answer);
+        let read = c.get_perfume_completed("9438").await.unwrap();
+        assert_eq!(read.web_error.as_ref(), Some(&error));
+        assert_eq!((read.value.id.as_str(), read.value.ranking.as_deref()), ("Creed/aventus", None));
+        assert_eq!(read.value.warnings, [format!("ranking unavailable: {error}")]);
+        assert_eq!(c.get_perfume("9438").await.unwrap(), read.value, "the tools get the same record, with the same warning");
+    }
+    // A page that is not the page of a perfume any more is told apart from all of these.
+    site.web.lock().unwrap().insert(page, (200, "<html><body>Another page</body></html>"));
+    let read = c.get_perfume_completed("9438").await.unwrap();
+    assert!(matches!(read.web_error, Some(ClientError::ParserOutdated(_))), "{:?}", read.web_error);
+
+    // A read the interface does not answer has no completing page: the web page is the
+    // read itself, and its failure is the error of the read.
+    let web = c.get_perfume_completed(SAUVAGE).await.unwrap();
+    assert_eq!((web.value.id.as_str(), web.web_error), (SAUVAGE, None));
+    site.web.lock().unwrap().insert("/Perfumes/Dior/Sauvage_Eau_de_Toilette", (403, challenge));
+    assert_eq!(c.get_perfume_completed(SAUVAGE).await.unwrap_err(), ClientError::CaptchaRequired);
+}
+
 #[tokio::test]
 async fn a_perfume_the_lookup_of_the_interface_misses_is_read_from_the_web_site() {
     let (c, site) = logged_in().await;

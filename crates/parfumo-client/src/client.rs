@@ -25,6 +25,29 @@ pub struct ParfumoClient {
     pub(crate) t: Arc<Transport>,
 }
 
+/// The answer of a read that a web page completes (the rank label of a perfume, the
+/// country of a brand or a perfumer), with the error of that completing read. The tools
+/// get the answer and its warning; a caller that must tell a page that changed from a
+/// site that asks to stop (a captcha, a rate limit) or cannot be reached gets the error
+/// itself, where the warning only has its text.
+#[derive(Clone, Debug)]
+pub struct Completed<T> {
+    /// The answer the tools get: when the completing page could not be read, it lacks
+    /// what the page shows and says so in its `warnings`.
+    pub value: T,
+    /// Why the completing page could not be read. `None` when it was read, and when the
+    /// read did not go through the application interface: the web page is then the read
+    /// itself, and its failure is the error of the read.
+    pub web_error: Option<ClientError>,
+}
+
+impl<T> Completed<T> {
+    /// An answer no completing read failed for.
+    fn whole(value: T) -> Self {
+        Self { value, web_error: None }
+    }
+}
+
 fn pair(k: &str, v: impl ToString) -> (String, String) {
     (k.to_string(), v.to_string())
 }
@@ -328,6 +351,12 @@ impl ParfumoClient {
     /// or a `Brand/Perfume` id. The community classification needs a second request; if it
     /// fails the record is returned without it and a warning is added.
     pub async fn get_perfume(&self, r: &str) -> Result<PerfumeDetails, ClientError> {
+        Ok(self.get_perfume_completed(r).await?.value)
+    }
+
+    /// [`Self::get_perfume`], with the error of the read of the web page that completes a
+    /// record of the application interface with its rank label, when that read failed.
+    pub async fn get_perfume_completed(&self, r: &str) -> Result<Completed<PerfumeDetails>, ClientError> {
         // Through the application interface when a session of it is held and it finds the
         // perfume; the web page otherwise, which knows every address.
         if self.has_app_session()
@@ -352,20 +381,26 @@ impl ParfumoClient {
                 }
             }
         }
-        Ok(details)
+        Ok(Completed::whole(details))
     }
 
     /// Completes a record read through the application interface with the one thing the
     /// interface does not give: the rank label of the web page ("Ranked 31 in Men's
     /// Perfume"). The page is read for it, so that a linked account is told nothing less
     /// than the web site shows. When the page cannot be read, the record is returned
-    /// without the label and a warning says so.
-    async fn with_rank(&self, mut record: PerfumeDetails) -> PerfumeDetails {
-        match self.perfume_ctx(&record.id, false).await {
-            Ok((page, _)) => record.ranking = page.ranking,
-            Err(e) => record.warnings.push(format!("ranking unavailable: {e}")),
-        }
-        record
+    /// without the label and a warning says so; the error is handed back beside it.
+    async fn with_rank(&self, mut record: PerfumeDetails) -> Completed<PerfumeDetails> {
+        let web_error = match self.perfume_ctx(&record.id, false).await {
+            Ok((page, _)) => {
+                record.ranking = page.ranking;
+                None
+            }
+            Err(e) => {
+                record.warnings.push(format!("ranking unavailable: {e}"));
+                Some(e)
+            }
+        };
+        Completed { value: record, web_error }
     }
 
     /// Calls an `h`-bound endpoint of a perfume. On an empty body the perfume page is
@@ -598,37 +633,52 @@ impl ParfumoClient {
 
     /// Completes a brand read through the application interface with what only the web
     /// page shows: the country, and the founding year when the interface has none. When
-    /// the page cannot be read, the brand is returned without them and a warning says so.
-    async fn with_brand_head(&self, mut brand: BrandPage) -> BrandPage {
+    /// the page cannot be read, the brand is returned without them and a warning says so;
+    /// the error is handed back beside it.
+    async fn with_brand_head(&self, mut brand: BrandPage) -> Completed<BrandPage> {
         let page = self.entity_head_page(routes::PERFUMES_PREFIX, &brand.brand.id).await.and_then(|html| parse::parse_brand_page(&html, 1));
-        match page {
+        let web_error = match page {
             Ok(page) => {
                 brand.country = page.country;
                 brand.founded = brand.founded.or(page.founded);
+                None
             }
             Err(e) => {
                 // The warning names all that the page was read for: a brand left without a
                 // founding year must not pass for one Parfumo states none of.
                 let missing = if brand.founded.is_none() { "country and founding year" } else { "country" };
                 brand.warnings.push(format!("{missing} unavailable: {e}"));
+                Some(e)
             }
-        }
-        brand
+        };
+        Completed { value: brand, web_error }
     }
 
     /// The same for a perfumer: the country.
-    async fn with_perfumer_head(&self, mut perfumer: PerfumerPage) -> PerfumerPage {
+    async fn with_perfumer_head(&self, mut perfumer: PerfumerPage) -> Completed<PerfumerPage> {
         let page = self.entity_head_page(routes::PERFUMERS_PREFIX, &perfumer.perfumer.id).await.and_then(|html| parse::parse_perfumer_page(&html, 1));
-        match page {
-            Ok(page) => perfumer.country = page.country,
-            Err(e) => perfumer.warnings.push(format!("country unavailable: {e}")),
-        }
-        perfumer
+        let web_error = match page {
+            Ok(page) => {
+                perfumer.country = page.country;
+                None
+            }
+            Err(e) => {
+                perfumer.warnings.push(format!("country unavailable: {e}"));
+                Some(e)
+            }
+        };
+        Completed { value: perfumer, web_error }
     }
 
     /// Brand record and one page (20 items) of its perfumes. `r` is a URL, a path
     /// (`/Perfumes/Dior`), a slug or a brand name.
     pub async fn get_brand(&self, r: &str, page: u32) -> Result<BrandPage, ClientError> {
+        Ok(self.get_brand_completed(r, page).await?.value)
+    }
+
+    /// [`Self::get_brand`], with the error of the read of the web page that completes a
+    /// brand of the application interface with its country, when that read failed.
+    pub async fn get_brand_completed(&self, r: &str, page: u32) -> Result<Completed<BrandPage>, ClientError> {
         self.brand_page(r, page, true).await
     }
 
@@ -637,10 +687,10 @@ impl ParfumoClient {
     /// follow the first one when a listing is read in one go: the head is known by then,
     /// and the same web page is not read once per page.
     pub async fn get_brand_rows(&self, r: &str, page: u32) -> Result<BrandPage, ClientError> {
-        self.brand_page(r, page, false).await
+        Ok(self.brand_page(r, page, false).await?.value)
     }
 
-    async fn brand_page(&self, r: &str, page: u32, head: bool) -> Result<BrandPage, ClientError> {
+    async fn brand_page(&self, r: &str, page: u32, head: bool) -> Result<Completed<BrandPage>, ClientError> {
         // Through the application interface when a session of it is held and its search
         // knows the brand; the web page otherwise.
         if self.has_app_session()
@@ -648,25 +698,31 @@ impl ParfumoClient {
         {
             return match answer {
                 Ok(brand) if head => Ok(self.with_brand_head(brand).await),
-                answer => answer,
+                answer => answer.map(Completed::whole),
             };
         }
         let html = self.entity_page(r, routes::PERFUMES_PREFIX, routes::LIVESEARCH_BRAND, page, "brand").await?;
-        parse::parse_brand_page(&html, page)
+        parse::parse_brand_page(&html, page).map(Completed::whole)
     }
 
     /// Perfumer record and one page (20 items) of their creations. `r` is a URL, a path
     /// (`/Perfumers/…`), a slug or a perfumer name.
     pub async fn get_perfumer(&self, r: &str, page: u32) -> Result<PerfumerPage, ClientError> {
+        Ok(self.get_perfumer_completed(r, page).await?.value)
+    }
+
+    /// [`Self::get_perfumer`], with the error of the read of the web page that completes a
+    /// perfumer of the application interface with their country, when that read failed.
+    pub async fn get_perfumer_completed(&self, r: &str, page: u32) -> Result<Completed<PerfumerPage>, ClientError> {
         self.perfumer_page(r, page, true).await
     }
 
     /// The same page of a perfumer, for its rows: see [`Self::get_brand_rows`].
     pub async fn get_perfumer_rows(&self, r: &str, page: u32) -> Result<PerfumerPage, ClientError> {
-        self.perfumer_page(r, page, false).await
+        Ok(self.perfumer_page(r, page, false).await?.value)
     }
 
-    async fn perfumer_page(&self, r: &str, page: u32, head: bool) -> Result<PerfumerPage, ClientError> {
+    async fn perfumer_page(&self, r: &str, page: u32, head: bool) -> Result<Completed<PerfumerPage>, ClientError> {
         // Through the application interface when a session of it is held, the number of
         // the perfumer is known and it has that perfumer; the web page otherwise.
         if self.has_app_session()
@@ -674,11 +730,11 @@ impl ParfumoClient {
         {
             return match answer {
                 Ok(perfumer) if head => Ok(self.with_perfumer_head(perfumer).await),
-                answer => answer,
+                answer => answer.map(Completed::whole),
             };
         }
         let html = self.entity_page(r, routes::PERFUMERS_PREFIX, routes::LIVESEARCH_PERFUMER, page, "perfumer").await?;
-        parse::parse_perfumer_page(&html, page)
+        parse::parse_perfumer_page(&html, page).map(Completed::whole)
     }
 
     /// Fragrance note (or note category) and one page (20 items) of perfumes containing it.

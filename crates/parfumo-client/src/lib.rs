@@ -20,7 +20,7 @@ mod social;
 mod transport;
 
 pub use account::{calls, find_list};
-pub use client::ParfumoClient;
+pub use client::{Completed, ParfumoClient};
 pub use client::{LISTING_TTL, RECORD_TTL};
 pub use error::ClientError;
 pub use models::*;
