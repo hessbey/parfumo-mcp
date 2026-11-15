@@ -603,6 +603,85 @@ async fn two_users_are_isolated_and_no_secret_leaks() {
     }
 }
 
+/// The session token of the application interface, on the HTTP server: every request made
+/// for a user carries that user's token and no other, also when the site refuses it, and
+/// the token shows nowhere. The stand-in site records the token of every request it
+/// receives under `/app/v1`, whatever it answers.
+#[tokio::test]
+async fn two_linked_users_never_carry_each_other_s_session_token() {
+    use parfumo_mcp_core::testing::{link_account, site::spawn_site};
+    use std::sync::atomic::Ordering;
+    let logs = captured_logs();
+
+    let (base, site) = spawn_site().await;
+    let app = TestApp::new(&base);
+    let (alice_id, alice_key) = app.add_user("alice");
+    let (bob_id, bob_key) = app.add_user("bob");
+    link_account(&app.state.core, alice_id, "alice").await;
+    link_account(&app.state.core, bob_id, "bob").await;
+    let seen = || std::mem::take(&mut *site.app_seen.lock().unwrap());
+    let call = |path: &str, token: &str| (path.to_string(), token.to_string());
+    assert_eq!(seen(), [call("/auth/login", ""), call("/auth/login", "")]);
+    let search = json!({"query": "sauvage"});
+    let found = |result: &Value| result["structuredContent"]["items"].as_array().map(Vec::len);
+    let mut answers = Vec::new();
+
+    // Each user's read carries their own token, and is served as their own account.
+    answers.push(app.call_tool(&alice_key, "parfumo_search_perfumes", search.clone()).await);
+    answers.push(app.call_tool(&bob_key, "parfumo_search_perfumes", search.clone()).await);
+    assert_eq!(seen(), [call("/perfumes", "app-alice-1"), call("/perfumes", "app-bob-2")]);
+    assert_eq!(*site.app_calls.lock().unwrap(), [call("alice", "/perfumes"), call("bob", "/perfumes")]);
+
+    // The site ends alice's session. Her token is refused once, to her own request, and her
+    // read is answered by the web site; bob's token still serves bob, and only bob.
+    site.app_live.lock().unwrap().remove("app-alice-1");
+    answers.push(app.call_tool(&alice_key, "parfumo_search_perfumes", search.clone()).await);
+    assert_eq!(found(answers.last().unwrap()), Some(20), "answered by the web site");
+    answers.push(app.call_tool(&bob_key, "parfumo_search_perfumes", search.clone()).await);
+    assert_eq!(found(answers.last().unwrap()), Some(1), "bob's session is untouched");
+    assert_eq!(seen(), [call("/perfumes", "app-alice-1"), call("/perfumes", "app-bob-2")], "alice's read was sent with another token than hers");
+
+    // Her next read logs in again with her own credentials: a token of her own, not bob's.
+    let logins = site.app_logins.load(Ordering::SeqCst);
+    answers.push(app.call_tool(&alice_key, "parfumo_search_perfumes", search.clone()).await);
+    assert_eq!(seen(), [call("/auth/login", ""), call("/perfumes", "app-alice-3")]);
+    assert_eq!(site.app_logins.load(Ordering::SeqCst), logins + 1);
+    assert_eq!(site.app_calls.lock().unwrap().last().unwrap(), &call("alice", "/perfumes"));
+
+    // Requests of the two users at the same time: each one with its own token.
+    let (a, b) = tokio::join!(
+        app.call_tool(&alice_key, "parfumo_search_perfumes", search.clone()),
+        app.call_tool(&bob_key, "parfumo_search_perfumes", search.clone())
+    );
+    let mut together = seen();
+    together.sort();
+    assert_eq!(together, [call("/perfumes", "app-alice-3"), call("/perfumes", "app-bob-2")]);
+    answers.extend([a, b]);
+
+    // Alice unlinks: her token is not sent again, by her or by anyone; bob's still serves bob.
+    let (_, body) = link(&app, &alice_key, &[("action", "unlink")]).await;
+    assert!(body.contains("erased"));
+    answers.push(app.call_tool(&alice_key, "parfumo_search_perfumes", search.clone()).await);
+    assert_eq!(found(answers.last().unwrap()), Some(20));
+    answers.push(app.call_tool(&bob_key, "parfumo_search_perfumes", search.clone()).await);
+    assert_eq!(seen(), [call("/perfumes", "app-bob-2")]);
+    // Every request the site served was made for the account its token belongs to.
+    for (account, _) in site.app_calls.lock().unwrap().iter() {
+        assert!(account == "alice" || account == "bob");
+    }
+
+    // No token in tool responses, audit rows or logs.
+    let log_text = String::from_utf8_lossy(&logs.0.lock().unwrap()).into_owned();
+    assert!(log_text.contains("tool call"), "logs were captured: {log_text}");
+    let audit_text = format!("{:?}", app.state.core.db.audit_list(None, 50).unwrap());
+    let responses: String = answers.iter().map(Value::to_string).collect();
+    for token in ["app-alice-", "app-bob-", "pw-alice", "pw-bob"] {
+        assert!(!log_text.contains(token), "a session token or a password in the logs");
+        assert!(!audit_text.contains(token), "a session token or a password in the audit log");
+        assert!(!responses.contains(token), "a session token or a password in a tool response");
+    }
+}
+
 /// Credentials mode, server side: encrypted storage, automatic re-login, three attempts.
 #[tokio::test]
 async fn credentials_mode_logs_in_again_and_gives_up_after_three_attempts() {
