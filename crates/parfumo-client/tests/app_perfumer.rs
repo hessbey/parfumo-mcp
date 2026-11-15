@@ -72,6 +72,11 @@ async fn handler(State(site): State<Arc<Site>>, uri: Uri, headers: HeaderMap, _b
     match uri.path() {
         "/app/v1/perfumer_details" if asked.contains("pf_id=509&") => json(PERFUMER_DETAILS),
         "/app/v1/perfumer_details" if asked.contains("pf_id=510&") => json(&long_listing()),
+        // Not recorded: the recorded answer without the count of its listing; a refusal in
+        // JSON under status 200, as the interface gives for a brand it does not have; a 404.
+        "/app/v1/perfumer_details" if asked.contains("pf_id=511&") => json(&PERFUMER_DETAILS.replace("\"matches\": 135,", "")),
+        "/app/v1/perfumer_details" if asked.contains("pf_id=512&") => json(r#"{"error":"Perfumer not found"}"#),
+        "/app/v1/perfumer_details" if asked.contains("pf_id=513&") => (StatusCode::NOT_FOUND, r#"{"error":"Not found"}"#).into_response(),
         // Not recorded: what the site answers for a number no perfumer has. Assumed here: no perfumer, no row.
         "/app/v1/perfumer_details" => json(r#"{"pf":null,"p":{"matches":0,"rows":[]}}"#),
         "/app/v1/perfume_details/2" => json(&namesakes()),
@@ -212,13 +217,24 @@ async fn without_a_session_of_the_interface_the_web_page_is_read() {
 }
 
 #[tokio::test]
-async fn an_answer_without_a_perfumer_is_not_found() {
+async fn a_perfumer_the_interface_has_nothing_about_or_does_not_count_is_left_to_the_web_site() {
     let (c, site) = client(true).await;
-    assert_eq!(c.get_perfumer("999999", 1).await.unwrap_err(), ClientError::NotFound("perfumer 999999".into()));
-    assert_eq!(site.asked.lock().unwrap().len(), 1, "the web site is not asked for a number it does not know either");
-    // Nothing was learnt from it.
-    let _ = c.get_perfumer("/Perfumers/999999", 1).await;
-    assert_eq!(site.asked.lock().unwrap().last().unwrap(), "/Perfumers/999999");
+    // An answer without a perfumer, one without the count of its listing, a refusal in
+    // JSON and a 404: the web page answers each time, as it does without a session.
+    for number in [999_999, 511, 512, 513] {
+        let p = c.get_perfumer(&number.to_string(), 2).await.unwrap();
+        let asked = std::mem::take(&mut *site.asked.lock().unwrap());
+        assert_eq!(
+            asked,
+            [
+                format!("/app/v1/perfumer_details?pf_id={number}&page=2&per_page=20&o=nr_desc&g_f=1&g_m=1&g_u=1"),
+                format!("/Perfumers/{number}?current_page=2")
+            ],
+            "{number}"
+        );
+        assert_eq!((p.perfumer.numeric_id, p.country.as_deref()), (Some(131), Some("France")), "the page of the web site");
+    }
+    assert!(c.has_app_session(), "none of this is a refusal of the session");
 }
 
 #[tokio::test]
@@ -236,11 +252,16 @@ async fn an_address_is_only_found_by_its_slug_and_a_name_borne_by_two_is_left_to
     c.get_perfumer(&format!("{}/Perfumers/Tst_Namesake_3", c.base_url()), 1).await.unwrap();
     assert_eq!(last(&site), "/Perfumers/Tst_Namesake_3");
 
-    // Each slug has its own number.
-    let _ = c.get_perfumer("Tst_Namesake", 1).await;
-    assert!(last(&site).starts_with("/app/v1/perfumer_details?pf_id=7001&"), "{}", last(&site));
-    let _ = c.get_perfumer("/Perfumers/Tst_Namesake_2", 1).await;
-    assert!(last(&site).starts_with("/app/v1/perfumer_details?pf_id=7002&"), "{}", last(&site));
+    // Each slug has its own number. (The fake has no perfumer under these numbers: the web
+    // page is asked after the interface.)
+    for (reference, call) in
+        [("Tst_Namesake", "/app/v1/perfumer_details?pf_id=7001&"), ("/Perfumers/Tst_Namesake_2", "/app/v1/perfumer_details?pf_id=7002&")]
+    {
+        let before = site.asked.lock().unwrap().len();
+        let _ = c.get_perfumer(reference, 1).await;
+        let asked = site.asked.lock().unwrap()[before..].to_vec();
+        assert!(asked[0].starts_with(call), "{reference}: {asked:?}");
+    }
 
     // The name tells neither from the other: the web site chooses, as it does without a session.
     c.get_perfumer("Tést Namesake", 1).await.unwrap();

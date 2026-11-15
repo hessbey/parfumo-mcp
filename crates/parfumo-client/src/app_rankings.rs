@@ -17,7 +17,7 @@ use serde_json::Value;
 
 use crate::{
     ClientError, ParfumoClient,
-    app_db::number,
+    app_db::matches,
     models::{Listing, PerfumeSummary, RankingKind},
     site::routes,
 };
@@ -25,18 +25,20 @@ use crate::{
 /// Rows asked per page: what the application asks, and the page size of the web listing.
 const PER_PAGE: u32 = 20;
 
-/// The order the release-year page of the application asks by default: most popular first.
-const YEAR_ORDER: &str = "nr_desc";
+/// The order of the web page of a release year: by name (measured: with this order the
+/// interface lists the same perfumes in the same order).
+const YEAR_ORDER: &str = "n_asc";
 
 fn pair(k: &str, v: impl ToString) -> (String, String) {
     (k.to_string(), v.to_string())
 }
 
 impl ParfumoClient {
-    /// The rankings the interface serves: the perfumes of a release year, asked as the
-    /// release-year page of the application asks them (`GET /perfumes` with `y_0`).
-    /// `None` for every other ranking, and for a page past the 1000th perfume, which the
-    /// application never asks: the caller then reads the web site.
+    /// The rankings the interface serves: the perfumes of a release year (`GET /perfumes`
+    /// with `y_0`), in the order of the web page. `None` for every other ranking, for a
+    /// page past the 1000th perfume, where the web page stops, and for an answer that is a
+    /// refusal or does not say how many perfumes the year has: the caller then reads the
+    /// web site.
     pub(crate) async fn app_rankings(&self, kind: &RankingKind, page: u32) -> Result<Option<Listing<PerfumeSummary>>, ClientError> {
         let RankingKind::Year(year) = kind else { return Ok(None) };
         let page = page.max(1);
@@ -53,17 +55,18 @@ impl ParfumoClient {
             pair("g_m", 1),
             pair("g_u", 1),
         ];
-        let found = self.app_get("/perfumes", &params).await?;
+        let Some(found) = self.app_read("/perfumes", &params).await? else { return Ok(None) };
         let rows = found.get("rows").and_then(Value::as_array).ok_or_else(|| ClientError::ParserOutdated("/app/v1/perfumes: no rows".into()))?;
-        let total = number(&found, "matches").filter(|n| *n >= 0.0).map(|n| n as u32);
+        // A count the answer does not carry is not a count of zero: the web page tells it.
+        let Some(total) = matches(&found) else { return Ok(None) };
         // A page that starts past the last perfume holds nothing, whatever the site answers.
-        let past_end = total.is_some_and(|t| (page - 1) * PER_PAGE >= t);
+        let past_end = u64::from(page - 1) * u64::from(PER_PAGE) >= total;
         Ok(Some(Listing {
             items: if past_end { Vec::new() } else { rows.iter().filter_map(|row| self.summary_from_index_row(row)).collect() },
             page,
-            // Like the web site, the application lists the first 1000 perfumes at most.
-            total_pages: total.map(|t| t.min(routes::MAX_LISTED_RESULTS).div_ceil(PER_PAGE)),
-            total_items: total,
+            // The web page lists the first 1000 perfumes of a year: the pages promised are its own.
+            total_pages: Some(total.min(u64::from(routes::MAX_LISTED_RESULTS)).div_ceil(u64::from(PER_PAGE)) as u32),
+            total_items: u32::try_from(total).ok(),
         }))
     }
 }

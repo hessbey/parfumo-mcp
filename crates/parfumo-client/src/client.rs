@@ -328,8 +328,10 @@ impl ParfumoClient {
     /// or a `Brand/Perfume` id. The community classification needs a second request; if it
     /// fails the record is returned without it and a warning is added.
     pub async fn get_perfume(&self, r: &str) -> Result<PerfumeDetails, ClientError> {
+        // Through the application interface when a session of it is held and it finds the
+        // perfume; the web page otherwise, which knows every address.
         if self.has_app_session()
-            && let Some(answer) = crate::app::settle(self.app_get_perfume(r).await.map(Some))
+            && let Some(answer) = crate::app::settle(self.app_perfume_record(r).await)
         {
             return answer;
         }
@@ -371,13 +373,10 @@ impl ParfumoClient {
         Ok((fresh, body))
     }
 
-    /// Long reviews of a perfume, full text, `limit` ≤ 50 per call.
+    /// Long reviews of a perfume, full text, `limit` ≤ 50 per call. Always read from the web
+    /// site: the application interface gives one rating where the page gives up to five, a
+    /// relative date and no total.
     pub async fn get_perfume_reviews(&self, r: &str, sort: ReviewSort, offset: u32, limit: u32) -> Result<Slice<Review>, ClientError> {
-        if self.has_app_session()
-            && let Some(answer) = crate::app::settle(self.app_perfume_reviews(r, sort, offset, limit).await)
-        {
-            return answer;
-        }
         let n = limit.clamp(1, routes::MAX_SLICE);
         let (_, ctx) = self.perfume_ctx(r, false).await?;
         let total = ctx.reviews_total;
@@ -411,13 +410,9 @@ impl ParfumoClient {
         Ok(Slice { items, offset, total: ctx.reviews_total })
     }
 
-    /// Statements (short reviews) of a perfume, `limit` ≤ 50 per call.
+    /// Statements (short reviews) of a perfume, `limit` ≤ 50 per call. Always read from the
+    /// web site, for the same reasons as the reviews.
     pub async fn get_perfume_statements(&self, r: &str, sort: ReviewSort, offset: u32, limit: u32) -> Result<Slice<Statement>, ClientError> {
-        if self.has_app_session()
-            && let Some(answer) = crate::app::settle(self.app_perfume_statements(r, sort, offset, limit).await)
-        {
-            return answer;
-        }
         let n = limit.clamp(1, routes::MAX_SLICE);
         let (_, ctx) = self.perfume_ctx(r, false).await?;
         let total = ctx.statements_total;
@@ -595,8 +590,8 @@ impl ParfumoClient {
     /// Perfumer record and one page (20 items) of their creations. `r` is a URL, a path
     /// (`/Perfumers/…`), a slug or a perfumer name.
     pub async fn get_perfumer(&self, r: &str, page: u32) -> Result<PerfumerPage, ClientError> {
-        // Through the application interface when a session of it is held and the number of
-        // the perfumer is known; the web page otherwise.
+        // Through the application interface when a session of it is held, the number of
+        // the perfumer is known and it has that perfumer; the web page otherwise.
         if self.has_app_session()
             && let Some(answer) = crate::app::settle(self.app_get_perfumer(r, page).await)
         {

@@ -5,14 +5,14 @@ use serde_json::Value;
 
 use crate::{
     ClientError, ParfumoClient,
-    app_db::{count, text},
+    app_db::{count, matches, text},
     models::{EntityRef, Listing, PerfumerPage},
     site::routes,
 };
 
 /// Rows asked per page: what the application asks, and the size of a page of the web site.
 const PER_PAGE: u32 = 20;
-/// The application never asks for more rows of one listing, and the web site shows no more.
+/// The web page of a perfumer shows no more rows: the pages promised are its own.
 const MAX_ROWS: u64 = 1000;
 /// The order of the web page: the most rated first (measured: the interface accepts it
 /// here). Without an order the creations come by name, which buries the known ones.
@@ -60,22 +60,19 @@ impl ParfumoClient {
     }
 
     /// The record of a perfumer and one page of their creations (`GET /perfumer_details`),
-    /// asked as the application asks it: the best rated scents first, where the web page
-    /// lists the most rated first. `None` when the number of the perfumer is not known: the
-    /// caller then reads the web page.
+    /// the most rated first, as on the web page. `None` when the number of the perfumer is
+    /// not known, when the interface has no perfumer under it, or when it does not say how
+    /// many creations there are: the caller then reads the web page.
     pub(crate) async fn app_get_perfumer(&self, r: &str, page: u32) -> Result<Option<PerfumerPage>, ClientError> {
         let Some(pf_id) = self.app_perfumer_number(r)? else { return Ok(None) };
         let page = page.max(1);
         // Without a gender the listing must be asked for all three.
         let params =
             [pair("pf_id", pf_id), pair("page", page), pair("per_page", PER_PAGE), pair("o", ORDER), pair("g_f", 1), pair("g_m", 1), pair("g_u", 1)];
-        let answer = self.app_get("/perfumer_details", &params).await?;
+        let Some(answer) = self.app_read("/perfumer_details", &params).await? else { return Ok(None) };
         let outdated = |what: &str| ClientError::ParserOutdated(format!("/app/v1/perfumer_details: {what}"));
-        // No perfumer in the answer: a number no perfumer has.
-        let pf = answer
-            .get("pf")
-            .filter(|pf| pf.as_object().is_some_and(|o| !o.is_empty()))
-            .ok_or_else(|| ClientError::NotFound(format!("perfumer {pf_id}")))?;
+        // No perfumer in the answer: whether there is one is for the web site to say.
+        let Some(pf) = answer.get("pf").filter(|pf| pf.as_object().is_some_and(|o| !o.is_empty())) else { return Ok(None) };
         let (slug, name) =
             (text(pf, "name_url").ok_or_else(|| outdated("no perfumer id"))?, text(pf, "name").ok_or_else(|| outdated("no perfumer name"))?);
         let numeric_id = count(pf, "id");
@@ -84,10 +81,11 @@ impl ParfumoClient {
         }
         let listing = answer.get("p").ok_or_else(|| outdated("no perfumes"))?;
         let rows = listing.get("rows").and_then(Value::as_array).ok_or_else(|| outdated("no rows"))?;
-        let total = count(listing, "matches").unwrap_or(0);
+        // A count the answer does not carry is not a count of zero: the web page tells it.
+        let Some(total) = matches(listing) else { return Ok(None) };
         Ok(Some(PerfumerPage {
             perfumer: EntityRef { url: self.t.absolute(&routes::perfumer(&slug)), id: slug, numeric_id, name },
-            // The interface names the country by a number only.
+            // The interface names the country by a number only: the country stays absent.
             country: None,
             perfumes: Listing {
                 items: rows.iter().filter_map(|row| self.summary_from_index_row(row)).collect(),

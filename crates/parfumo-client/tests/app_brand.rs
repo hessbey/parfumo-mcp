@@ -24,8 +24,18 @@ const SEARCH_CREED: &str = include_str!("fixtures/app_search_creed.json");
 /// Not recorded, written in the recorded shape: a brand whose slug is made of digits, as `4711` is on the site.
 const SEARCH_DIGITS: &str =
     r#"{"notes":[],"brands":[{"b_id":"99","b_name":"1234","b_name_url":"1234","b_nr_of_perfums":3}],"similar_queries":false,"perfumes":[]}"#;
-/// Not recorded either: what is assumed of a number no brand has.
+/// Not recorded either: an answer without a brand.
 const NO_BRAND: &str = r#"{"b":null,"p":{"matches":0,"rows":[]}}"#;
+/// What the interface answers, under status 200, for a number no brand has (`docs/APP_API.md`).
+const BRAND_NOT_FOUND: &str = r#"{"error":"Brand not found"}"#;
+
+/// Not recorded, written in the recorded shape: a search that finds one brand, named
+/// `name`, under a number the fake has no brand for.
+fn search_one(b_id: u64, name: &str) -> String {
+    format!(
+        r#"{{"notes":[],"brands":[{{"b_id":"{b_id}","b_name":"{name}","b_name_url":"{name}","b_nr_of_perfums":3}}],"similar_queries":false,"perfumes":[]}}"#
+    )
+}
 
 const FIRST_PAGE_OF_CREED: &str = "/app/v1/brand_details?b_id=253&page=1&per_page=20&o=nr_desc&g_f=1&g_m=1&g_u=1";
 
@@ -65,9 +75,15 @@ async fn handler(State(site): State<Arc<Site>>, uri: Uri, headers: HeaderMap, _b
     }
     match uri.path() {
         "/app/v1/search" if asked.ends_with("filter=1234") => json(SEARCH_DIGITS),
+        // Brands the search knows and the fake has nothing about, each in its own way.
+        "/app/v1/search" if asked.ends_with("filter=Ghost") => json(&search_one(999_999, "Ghost")),
+        "/app/v1/search" if asked.ends_with("filter=Gone") => json(&search_one(404_404, "Gone")),
+        "/app/v1/search" if asked.ends_with("filter=Other") => json(&search_one(777, "Other")),
+        "/app/v1/search" if asked.ends_with("filter=Refused") => json(&search_one(500_500, "Refused")),
         "/app/v1/search" => json(SEARCH_CREED),
         "/app/v1/brand_details" if asked.contains("b_id=999999&") => json(NO_BRAND),
-        // Assumed as well: the other way the interface may tell that no brand has a number.
+        "/app/v1/brand_details" if asked.contains("b_id=500500&") => json(BRAND_NOT_FOUND),
+        // Assumed: another way the interface may tell that no brand has a number.
         "/app/v1/brand_details" if asked.contains("b_id=404404&") => (StatusCode::NOT_FOUND, r#"{"error":"Not found"}"#).into_response(),
         // Assumed too: an answer about another brand than the one asked for.
         "/app/v1/brand_details" if asked.contains("b_id=777&") => json(&site.details),
@@ -132,8 +148,9 @@ async fn a_brand_named_by_its_slug_is_found_by_the_search_then_read_in_one_call(
     assert_eq!((bayrhum.year, bayrhum.rating, bayrhum.rating_count, bayrhum.reviews_count), (None, Some(7.0), Some(1), None), "zeros are absences");
 
     // The rows gave the numbers of their perfumes: one is then read without being looked up.
+    // (The fake has no record: the web page is then asked, which it has not either.)
     let _ = c.get_perfume("Creed/absolu-aventus").await;
-    assert_eq!(site.take(), ["/app/v1/perfume_details/225233"]);
+    assert_eq!(site.take(), ["/app/v1/perfume_details/225233", "/Perfumes/Creed/absolu-aventus"]);
 }
 
 #[tokio::test]
@@ -161,23 +178,41 @@ async fn an_address_a_path_and_a_name_reach_the_brand_and_the_page_asked_is_pass
 }
 
 #[tokio::test]
-async fn a_number_is_the_number_of_the_brand_unless_a_brand_is_named_by_these_digits() {
+async fn digits_are_a_slug_or_a_name_like_any_other_and_never_the_number_of_a_brand() {
     let (c, site) = logged_in().await;
-    c.get_brand("253", 1).await.unwrap();
-    assert_eq!(site.take(), ["/app/v1/search?filter=253", FIRST_PAGE_OF_CREED], "no brand has this slug: the number itself");
+    // 253 is the number of Creed in the database, and no brand has this slug or this name:
+    // the web site decides, as for any name the search does not know.
+    assert!(c.get_brand("253", 1).await.is_err());
+    let asked = site.take();
+    assert_eq!(&asked[..2], ["/app/v1/search?filter=253", "/Perfumes/253"], "{asked:?}");
+    assert!(asked.iter().all(|a| !a.starts_with("/app/v1/brand_details")), "the page of Creed is not an answer: {asked:?}");
 
-    // On the web site `4711` is the slug of a brand, not the brand number 4711.
+    // On the web site `4711` is the slug of a brand: such a brand is read under the number
+    // the search gives for it, not under the number its digits spell.
     c.get_brand("1234", 1).await.unwrap();
     assert_eq!(site.take(), ["/app/v1/search?filter=1234", "/app/v1/brand_details?b_id=99&page=1&per_page=20&o=nr_desc&g_f=1&g_m=1&g_u=1"]);
+}
 
-    // An answer without a brand is not an empty page.
-    assert_eq!(c.get_brand("999999", 1).await.unwrap_err(), ClientError::NotFound("brand 999999".into()));
-    assert!(site.take().iter().all(|a| a.starts_with("/app/v1/")), "and the web site is not asked for it");
-    // Nor is the page of another brand an answer.
-    assert_eq!(c.get_brand("777", 1).await.unwrap_err(), ClientError::NotFound("brand 777".into()));
-    site.take();
-    assert!(matches!(c.get_brand("404404", 1).await.unwrap_err(), ClientError::NotFound(_)));
-    assert_eq!(site.take(), ["/app/v1/search?filter=404404", "/app/v1/brand_details?b_id=404404&page=1&per_page=20&o=nr_desc&g_f=1&g_m=1&g_u=1"]);
+#[tokio::test]
+async fn a_brand_the_interface_has_nothing_about_is_left_to_the_web_site() {
+    let (c, site) = logged_in().await;
+    // An answer without a brand, a refusal in JSON under status 200, a 404, and the page
+    // of another brand than asked: none of them says that Parfumo has no such brand. The
+    // fake has no web page: the outcome is the one of the web code, which is what is asked.
+    for (reference, b_id) in [("Ghost", 999_999), ("Refused", 500_500), ("Gone", 404_404), ("Other", 777)] {
+        assert!(c.get_brand(reference, 1).await.is_err(), "{reference}");
+        let asked = site.take();
+        assert_eq!(
+            &asked[..3],
+            [
+                format!("/app/v1/search?filter={reference}"),
+                format!("/app/v1/brand_details?b_id={b_id}&page=1&per_page=20&o=nr_desc&g_f=1&g_m=1&g_u=1"),
+                format!("/Perfumes/{reference}")
+            ],
+            "{reference}"
+        );
+    }
+    assert!(c.has_app_session(), "none of this is a refusal of the session");
 }
 
 #[tokio::test]
@@ -230,7 +265,7 @@ async fn a_brand_the_search_does_not_know_is_left_to_the_web_site() {
 }
 
 #[tokio::test]
-async fn an_answer_of_another_shape_is_reported_and_a_missing_count_is_not_zero() {
+async fn an_answer_of_another_shape_is_reported_and_one_without_its_count_is_left_to_the_web_site() {
     // Not recorded: the recorded answer without its listing, then without the count of its listing.
     let no_listing = BRAND_DETAILS.replace(r#""p": {"#, r#""q": {"#);
     let no_count = BRAND_DETAILS.replace(r#""matches": 104"#, r#""found": 104"#);
@@ -240,10 +275,13 @@ async fn an_answer_of_another_shape_is_reported_and_a_missing_count_is_not_zero(
     c.app_login("someone@example.org", "pw").await.unwrap();
     assert_eq!(c.get_brand("Creed", 1).await.unwrap_err(), ClientError::ParserOutdated("/app/v1/brand_details: no perfumes".into()));
 
-    let (c, _site) = client_of(&no_count).await;
+    // A count the answer does not carry is not a count of zero, and the web page always
+    // tells how many perfumes a brand has: it is read (the fake has none to serve).
+    let (c, site) = client_of(&no_count).await;
     c.app_login("someone@example.org", "pw").await.unwrap();
-    let b = c.get_brand("Creed", 1).await.unwrap();
-    assert_eq!((b.perfumes.items.len(), b.perfumes.total_items, b.perfumes.total_pages), (5, None, None));
+    site.take();
+    assert!(c.get_brand("Creed", 1).await.is_err());
+    assert_eq!(&site.take()[..3], ["/app/v1/search?filter=Creed", FIRST_PAGE_OF_CREED, "/Perfumes/Creed"]);
 }
 
 #[tokio::test]
