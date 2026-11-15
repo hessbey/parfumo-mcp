@@ -76,6 +76,8 @@ struct Site {
     refusing: AtomicBool,
     /// The nickname `GET /auth/me` answers instead of the recorded one.
     nick: Mutex<Option<String>>,
+    /// What `GET /auth/me` answers instead of the recorded answer.
+    me: Mutex<Option<String>>,
 }
 
 /// The recorded answer of a rated perfume, with other ratings.
@@ -126,9 +128,10 @@ async fn handler(State(site): State<Arc<Site>>, method: Method, uri: Uri, header
     let query: HashMap<String, String> = url::form_urlencoded::parse(uri.query().unwrap_or_default().as_bytes()).into_owned().collect();
     let p_id = query.get("p_id").and_then(|p| p.parse::<u64>().ok()).unwrap_or_default();
     match (path, p_id) {
-        ("/app/v1/auth/me", _) => match site.nick.lock().unwrap().clone() {
-            Some(nick) => json(ME.replace("testuser", &nick)),
-            None => json(ME.into()),
+        ("/app/v1/auth/me", _) => match (site.me.lock().unwrap().clone(), site.nick.lock().unwrap().clone()) {
+            (Some(answer), _) => json(answer),
+            (None, Some(nick)) => json(ME.replace("testuser", &nick)),
+            (None, None) => json(ME.into()),
         },
         ("/app/v1/rating", RATED) => json(RATING.into()),
         ("/app/v1/rating", NOT_RATED) => json(RATING_NONE.into()),
@@ -202,6 +205,26 @@ async fn a_nickname_that_cannot_name_a_page_is_left_to_the_web_site() {
     *site.nick.lock().unwrap() = Some("two words".into());
     assert_eq!(c.own_nick().await.unwrap(), "testuser", "the one the account page shows");
     assert_eq!(asked(&site), ["GET /app/v1/auth/me", "GET /account/notifications"]);
+}
+
+#[tokio::test]
+async fn an_error_object_instead_of_the_member_leaves_the_nickname_to_the_account_page() {
+    // Not recorded for this call with a valid token: the two ways the interface is known to
+    // say no under status 200. Neither says who the member is, nor that the answer changed.
+    for refusal in [r#"{"status":"error","message":"Service temporarily unavailable"}"#, r#"{"error":"Unavailable"}"#] {
+        let (c, site) = logged_in().await;
+        *site.me.lock().unwrap() = Some(refusal.into());
+        assert_eq!(c.own_nick().await.unwrap(), "testuser", "the one the account page shows: {refusal}");
+        assert_eq!(asked(&site), ["GET /app/v1/auth/me", "GET /account/notifications"], "{refusal}");
+        assert!(c.has_app_session(), "an error object is not a refusal of the token");
+    }
+
+    // Not recorded either: an answer that is no error and does not name the member. That
+    // is a change of the interface, and is reported as one.
+    let (c, site) = logged_in().await;
+    *site.me.lock().unwrap() = Some(r#"{"status":"success","user":{"id":"1"}}"#.into());
+    assert_eq!(c.own_nick().await.unwrap_err(), ClientError::ParserOutdated("/app/v1/auth/me: no nickname".into()));
+    assert_eq!(asked(&site), ["GET /app/v1/auth/me"], "and no web page is asked");
 }
 
 #[tokio::test]

@@ -351,13 +351,17 @@ impl ParfumoClient {
 
     /// The nickname of the member the token belongs to: a cheap way to check the session.
     pub async fn app_nick(&self) -> Result<String, ClientError> {
-        let me = self.app_get("/auth/me", &[]).await?;
-        me.pointer("/user/nick_name")
-            .and_then(Value::as_str)
-            .filter(|n| !n.is_empty())
-            .map(str::to_string)
-            .ok_or_else(|| ClientError::ParserOutdated(format!("{PREFIX}/auth/me: no nickname")))
+        nick_of(&self.app_get("/auth/me", &[]).await?)
     }
+}
+
+/// The nickname an answer of `GET /auth/me` gives.
+pub(crate) fn nick_of(me: &Value) -> Result<String, ClientError> {
+    me.pointer("/user/nick_name")
+        .and_then(Value::as_str)
+        .filter(|n| !n.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| ClientError::ParserOutdated(format!("{PREFIX}/auth/me: no nickname")))
 }
 
 #[cfg(test)]

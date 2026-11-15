@@ -19,7 +19,8 @@ use serde_json::Value;
 
 use crate::{
     ClientError, ParfumoClient,
-    app_db::{count, number, text},
+    app::nick_of,
+    app_db::{count, is_refusal, number, text},
     models::{ClassChoice, MemberRatings},
     site::routes,
 };
@@ -39,10 +40,16 @@ fn served(answer: Result<Value, ClientError>) -> Result<Option<Value>, ClientErr
 
 impl ParfumoClient {
     /// The nickname of the member (`GET /auth/me`), kept for the session as the web code
-    /// keeps it. `None` for a nickname that could not stand in the address of the member's
-    /// pages, which the web code refuses too.
+    /// keeps it. `None` when the interface answers an error object under status 200, its
+    /// way of saying no, which is not an answer that lost its nickname; and for a nickname
+    /// that could not stand in the address of the member's pages, which the web code
+    /// refuses too. The account page of the web site then names the member.
     pub(crate) async fn app_own_nick(&self) -> Result<Option<String>, ClientError> {
-        let nick = self.app_nick().await?;
+        let me = self.app_get("/auth/me", &[]).await?;
+        if is_refusal(&me) {
+            return Ok(None);
+        }
+        let nick = nick_of(&me)?;
         if nick.contains(['/', '?', '#', ' ']) {
             return Ok(None);
         }
