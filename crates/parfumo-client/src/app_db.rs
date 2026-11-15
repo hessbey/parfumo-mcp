@@ -92,11 +92,53 @@ fn plain_text(v: &Value, key: &str) -> Option<String> {
     text(v, key).map(|t| plain(&t)).filter(|t| !t.is_empty())
 }
 
-/// Whether an answer is a refusal in JSON: the interface answers some of them with status
-/// 200 (`{"error": "Brand not found"}`, `{"status": "error", …}`).
-pub(crate) fn refused(answer: &Value) -> bool {
+/// Why the interface has no answer to a read.
+#[derive(Debug, PartialEq, Eq)]
+enum Unserved {
+    /// It has nothing there: a 404, a refusal that says "not found", an answer about nothing.
+    Absent,
+    /// Any other refusal worded in JSON, with its words when it has some: it says nothing
+    /// of whether what was asked exists.
+    Refused(String),
+}
+
+/// As many characters of a refusal as are passed on.
+const MAX_REFUSAL_CHARS: usize = 200;
+
+/// The refusal an answer is, when it is one: the interface words some of them in JSON under
+/// status 200 (`{"error": "Brand not found"}`, `{"status": "error", …}`).
+fn refusal(answer: &Value) -> Option<Unserved> {
     let error = answer.get("error").is_some_and(|e| !matches!(e, Value::Null | Value::Bool(false)) && e.as_str() != Some(""));
-    error || text(answer, "status").as_deref() == Some("error")
+    if !error && text(answer, "status").as_deref() != Some("error") {
+        return None;
+    }
+    let words = ["message", "error"].iter().find_map(|key| text(answer, key)).unwrap_or_default();
+    // On one line and of a bounded length: these words end in an error message.
+    let words: String = words.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(MAX_REFUSAL_CHARS).collect();
+    Some(if words.to_lowercase().contains("not found") { Unserved::Absent } else { Unserved::Refused(words) })
+}
+
+/// Whether a part of an answer holds nothing: absent in all but name.
+fn holds_nothing(part: &Value) -> bool {
+    match part {
+        Value::Null | Value::Bool(false) => true,
+        Value::String(text) => text.trim().is_empty(),
+        Value::Array(entries) => entries.is_empty(),
+        Value::Object(fields) => fields.is_empty(),
+        _ => false,
+    }
+}
+
+/// What a read by number reports when the interface gives no record and no web page stands
+/// behind the number: not found only when the interface has nothing under it. Any other
+/// refusal says nothing of the perfume, and is reported as a refusal, with its words.
+fn no_record(p_id: u64, why: Unserved) -> ClientError {
+    let path = format!("{}/perfume_details/{p_id}", crate::app::PREFIX);
+    match why {
+        Unserved::Absent => ClientError::NotFound(format!("/perfume_details/{p_id}")),
+        Unserved::Refused(words) if words.is_empty() => ClientError::Upstream(format!("{path} was refused")),
+        Unserved::Refused(words) => ClientError::Upstream(format!("{path} was refused: {words}")),
+    }
 }
 
 /// Adds to a memory of identifiers that must stay bounded: once full it is emptied, and
@@ -153,42 +195,63 @@ const CLASS_GROUPS: [(usize, &str); 4] = [(0, "Type"), (2, "Occasion"), (1, "Sea
 const POLE_PAIRS: [[(u64, &str); 2]; 2] = [[(2, "Masculine"), (1, "Feminine")], [(3, "Modern"), (4, "Classic")]];
 /// As many accords as the web page shows.
 const MAX_ACCORDS: usize = 5;
+/// The chart the accords are taken from.
+const ACCORDS_GROUP: &str = "Type";
 /// The five rating scales: name, then the suffix of their fields.
 const SCALES: [(&str, &str); 5] = [("scent", ""), ("durability", "_dur"), ("sillage", "_sillage"), ("bottle", "_bottle"), ("pricing", "_pricing")];
 
+/// What the listed poles of "Audience & Style" may leave of 100 by rounding alone.
+const ROUNDING: f64 = 0.05;
+
 /// The shares of a pie chart (Type, Season, Occasion), strongest first, as the web chart
 /// gives them: out of the slices listed. The `p` of the interface also counts the slices
-/// it does not list, so those of a "Type" chart do not add up to 100.
-fn pie_shares(chart: &Value) -> Vec<ClassShare> {
-    let mut slices: Vec<(String, f64)> =
-        by_position(chart).into_iter().filter_map(|(_, s)| Some((text(s, "n")?, number(s, "p").filter(|p| *p > 0.0)?))).collect();
+/// it does not list, so those of a "Type" chart do not add up to 100. `None` when a slice
+/// has no name or no share that can be read: the others would be scaled up to fill its
+/// place, and nothing would tell.
+fn pie_shares(chart: &Value) -> Option<Vec<ClassShare>> {
+    let mut slices = Vec::new();
+    for (_, slice) in by_position(chart) {
+        let (label, share) = (text(slice, "n")?, number(slice, "p").filter(|p| p.is_finite() && *p >= 0.0)?);
+        // A slice nobody voted for is not on the web chart.
+        if share > 0.0 {
+            slices.push((label, share));
+        }
+    }
     let listed: f64 = slices.iter().map(|(_, p)| p).sum();
     slices.sort_by(|a, b| b.1.total_cmp(&a.1));
-    slices.into_iter().map(|(label, p)| ClassShare { label, percent: tenth(p / listed * 100.0) }).collect()
+    Some(slices.into_iter().map(|(label, p)| ClassShare { label, percent: tenth(p / listed * 100.0) }).collect())
 }
 
 /// The shares of the "Audience & Style" chart as the web chart gives them: two pairs that
 /// each add up to 100 (Masculine and Feminine, Modern and Classic). The interface gives one
 /// share over the four poles and leaves the weakest out: its share is what the three
-/// others leave of 100. A pair that cannot be rebuilt is left out and named in `warnings`.
+/// others leave of 100. When the listed poles leave nothing of 100, every pole left out
+/// holds nothing. A pair that cannot be rebuilt (what is left of 100 belongs to several
+/// poles left out) is left out and named in `warnings`; a pair nobody chose between is
+/// left out without a word, there is no chart of it.
 fn pole_shares(chart: &Value, poles: Option<&Value>, warnings: &mut Vec<String>) -> Vec<ClassShare> {
     let entries = by_position(chart);
     // Nobody voted: there is no chart, and nothing to tell.
     if entries.is_empty() {
         return Vec::new();
     }
-    let slices: Vec<(u64, f64)> = entries.iter().filter_map(|(_, s)| Some((count(s, "ct")?, number(s, "p").filter(|p| *p >= 0.0)?))).collect();
+    let slices: Vec<(u64, f64)> =
+        entries.iter().filter_map(|(_, s)| Some((count(s, "ct")?, number(s, "p").filter(|p| p.is_finite() && *p >= 0.0)?))).collect();
     let listed = |ct: u64| slices.iter().find(|(pole, _)| *pole == ct).map(|(_, p)| *p);
     let known = || POLE_PAIRS.iter().flatten().map(|(ct, _)| *ct);
     // An entry without its share, or the share of a pole this code does not know, would
     // be taken for the missing pole's.
     let trusted = slices.len() == entries.len() && slices.iter().all(|(ct, _)| known().any(|pole| pole == *ct));
     let missing: Vec<u64> = known().filter(|ct| listed(*ct).is_none()).collect();
-    let restored = match missing.as_slice() {
-        [only] => Some((*only, (100.0 - slices.iter().map(|(_, p)| p).sum::<f64>()).max(0.0))),
+    let left = 100.0 - slices.iter().map(|(_, p)| p).sum::<f64>();
+    // The share of a pole left out: all that is left when it is the only one, nothing when
+    // nothing is left. Anything else left cannot be told apart between the poles left out.
+    let restored = match missing.len() {
+        1 => Some(left.max(0.0)),
+        _ if left <= ROUNDING => Some(0.0),
         _ => None,
     };
-    let share = |ct: u64| listed(ct).or(restored.filter(|(pole, _)| *pole == ct).map(|(_, p)| p)).filter(|_| trusted);
+    let share = |ct: u64| listed(ct).or(restored.filter(|_| missing.contains(&ct))).filter(|_| trusted);
     let name = |ct: u64, fallback: &str| {
         let named = |list: &Value| by_position(list).into_iter().find(|(_, e)| count(e, "ct") == Some(ct)).and_then(|(_, e)| text(e, "n"));
         poles.and_then(named).or_else(|| named(chart)).unwrap_or_else(|| fallback.to_string())
@@ -201,6 +264,8 @@ fn pole_shares(chart: &Value, poles: Option<&Value>, warnings: &mut Vec<String>)
                 shares.push(ClassShare { label: name(first, first_name), percent });
                 shares.push(ClassShare { label: name(second, second_name), percent: tenth(100.0 - f64::from(percent)) });
             }
+            // Nobody chose between the two: there is no pair to show, and nothing is lost.
+            (Some(_), Some(_)) => {}
             _ => warnings.push(format!(
                 "classification: the {first_name}/{second_name} shares of \"Audience & Style\" cannot be worked out from what the application interface gives"
             )),
@@ -219,15 +284,28 @@ impl ParfumoClient {
         remember(&mut known, MAX_PERFUMES, id.to_lowercase(), (p_id, id.to_string()));
     }
 
+    /// A read of the interface, or why it has no answer: an address it answers 404 to, or
+    /// a refusal worded in JSON under status 200.
+    async fn app_answer(&self, path: &str, params: &[(String, String)]) -> Result<Result<Value, Unserved>, ClientError> {
+        match self.app_get(path, params).await {
+            Ok(answer) => Ok(match refusal(&answer) {
+                // The words of a refusal end in an error message, where the session token
+                // must never be: words that repeat it are not passed on.
+                Some(Unserved::Refused(words)) if self.t.app_token().is_some_and(|token| !token.is_empty() && words.contains(&token)) => {
+                    Err(Unserved::Refused(String::new()))
+                }
+                Some(why) => Err(why),
+                None => Ok(answer),
+            }),
+            Err(ClientError::NotFound(_)) => Ok(Err(Unserved::Absent)),
+            Err(e) => Err(e),
+        }
+    }
+
     /// A read of the interface, or `None` when it has nothing to say: an address it answers
     /// 404 to, or a refusal in JSON. The caller then leaves the read to the web site.
     pub(crate) async fn app_read(&self, path: &str, params: &[(String, String)]) -> Result<Option<Value>, ClientError> {
-        match self.app_get(path, params).await {
-            Ok(answer) if refused(&answer) => Ok(None),
-            Ok(answer) => Ok(Some(answer)),
-            Err(ClientError::NotFound(_)) => Ok(None),
-            Err(e) => Err(e),
-        }
+        Ok(self.app_answer(path, params).await?.ok())
     }
 
     /// The brands the search of the application finds for a slug or a name (`GET /search`):
@@ -284,33 +362,47 @@ impl ParfumoClient {
     /// A perfume it has nothing about is not found.
     pub(crate) async fn app_get_perfume(&self, reference: &str) -> Result<PerfumeDetails, ClientError> {
         let p_id = self.app_perfume_id(reference).await?;
-        self.app_perfume_by_number(p_id).await?.ok_or_else(|| ClientError::NotFound(format!("/perfume_details/{p_id}")))
+        self.app_perfume_by_number(p_id).await?.map_err(|why| no_record(p_id, why))
     }
 
     /// The full record of a perfume, for the read that has the web page behind it. `None`
-    /// when the interface does not find the reference, or has nothing under the number it
-    /// remembered for it (a perfume merged or removed since): the web page then answers.
-    /// A bare number has no address on the web site: the interface alone tells whether it exists.
+    /// when the interface does not find the reference, has nothing under the number it
+    /// remembered for it (a perfume merged or removed since), or refuses to answer: the
+    /// web page then answers. A bare number has no address on the web site: the interface
+    /// alone tells whether it exists, and a refusal about something else is reported as one.
     pub(crate) async fn app_perfume_record(&self, reference: &str) -> Result<Option<PerfumeDetails>, ClientError> {
         let Some(p_id) = self.app_perfume_number(reference).await? else { return Ok(None) };
         match self.app_perfume_by_number(p_id).await? {
-            Some(record) => Ok(Some(record)),
-            None if reference.trim().chars().all(|c| c.is_ascii_digit()) => Err(ClientError::NotFound(format!("/perfume_details/{p_id}"))),
-            None => {
+            Ok(record) => Ok(Some(record)),
+            Err(why) if reference.trim().chars().all(|c| c.is_ascii_digit()) => Err(no_record(p_id, why)),
+            Err(Unserved::Absent) => {
                 self.t.perfume_ids.lock().unwrap_or_else(|e| e.into_inner()).retain(|_, (number, _)| *number != p_id);
                 Ok(None)
             }
+            // Nothing says that the number is not the one of the perfume any more: it is kept.
+            Err(Unserved::Refused(_)) => Ok(None),
         }
     }
 
-    /// The record of the perfume that bears a number; `None` when the interface has nothing
-    /// under it. Filled as the web record is: same scales, same order, same addresses.
-    /// Two parts of the web record are not in the answer and stay absent: the rank label
-    /// ("Ranked 31 in Men's Perfume") and, for the facts, anything but their English text.
-    async fn app_perfume_by_number(&self, p_id: u64) -> Result<Option<PerfumeDetails>, ClientError> {
-        let Some(record) = self.app_read(&format!("/perfume_details/{p_id}"), &[]).await? else { return Ok(None) };
+    /// The record of the perfume that bears a number, or why the interface gives none: it
+    /// has nothing under the number, or refuses. Filled as the web record is: same scales,
+    /// same order, same addresses. Two parts of the web record are not in the answer and
+    /// stay absent: the rank label ("Ranked 31 in Men's Perfume") and, for the facts,
+    /// anything but their English text.
+    async fn app_perfume_by_number(&self, p_id: u64) -> Result<Result<PerfumeDetails, Unserved>, ClientError> {
+        let record = match self.app_answer(&format!("/perfume_details/{p_id}"), &[]).await? {
+            Ok(record) => record,
+            Err(why) => return Ok(Err(why)),
+        };
         let outdated = |what: &str| ClientError::ParserOutdated(format!("/app/v1/perfume_details: {what}"));
-        let (p, b) = (record.get("p").ok_or_else(|| outdated("no perfume"))?, record.get("b").ok_or_else(|| outdated("no brand"))?);
+        // An answer under status 200 that holds no perfume, as the interface gives for a
+        // brand or a perfumer it does not have, or that holds another perfume than the one
+        // asked: nothing is under this number. It is not a change of the interface.
+        let Some(p) = record.get("p").filter(|p| !holds_nothing(p) && count(p, "id").is_none_or(|id| id == p_id)) else {
+            return Ok(Err(Unserved::Absent));
+        };
+        // A perfume without its brand is another matter: every perfume has one.
+        let b = record.get("b").filter(|b| !holds_nothing(b)).ok_or_else(|| outdated("no brand"))?;
         let (brand_url, name_url) =
             (text(b, "name_url").ok_or_else(|| outdated("no brand id"))?, text(p, "name_url").ok_or_else(|| outdated("no perfume id"))?);
         let id = format!("{brand_url}/{name_url}");
@@ -353,20 +445,35 @@ impl ParfumoClient {
         // missing or unreadable must not shift the next ones under its name and its votes.
         let charts = record.get("c").map(by_position).unwrap_or_default();
         let totals = record.get("c_total").map(by_position).unwrap_or_default();
+        let votes = |place: usize| at(&totals, place).and_then(|total| total.as_u64().or_else(|| total.as_str()?.trim().parse().ok()));
         let mut warnings = Vec::new();
         let classification: Vec<ClassGroup> = CLASS_GROUPS
             .iter()
             .filter_map(|(place, group)| {
-                let chart = at(&charts, *place)?;
-                let shares = if *place == AUDIENCE { pole_shares(chart, record.get("c_poles"), &mut warnings) } else { pie_shares(chart) };
+                // A chart nobody voted in is no chart of the web record either: an empty
+                // list, or none at all beside a count of no votes. One that is missing
+                // where votes are counted, that is not a list, or that holds a slice which
+                // cannot be read, is a chart the web record has and this one has not: it is told.
+                let shares = match at(&charts, *place).filter(|chart| !chart.is_null()) {
+                    None if votes(*place).unwrap_or(0) == 0 => return None,
+                    None => None,
+                    Some(chart) if !(chart.is_array() || chart.is_object()) => None,
+                    Some(chart) if *place == AUDIENCE => Some(pole_shares(chart, record.get("c_poles"), &mut warnings)),
+                    Some(chart) => pie_shares(chart),
+                };
+                let Some(shares) = shares else {
+                    let accords = if *group == ACCORDS_GROUP { ", nor the accords, which are its strongest shares" } else { "" };
+                    warnings.push(format!("classification: the \"{group}\" chart cannot be read from what the application interface gives{accords}"));
+                    return None;
+                };
                 (!shares.is_empty()).then(|| ClassGroup {
                     group: group.to_string(),
-                    votes: at(&totals, *place).and_then(Value::as_u64).and_then(|n| u32::try_from(n).ok()),
+                    votes: votes(*place).and_then(|n| u32::try_from(n).ok()),
                     shares,
                 })
             })
             .collect();
-        Ok(Some(PerfumeDetails {
+        Ok(Ok(PerfumeDetails {
             url: self.t.absolute(&routes::perfume(&id)),
             p_id: Some(p_id),
             name: text(p, "con_ext_name").or_else(|| text(p, "name")).ok_or_else(|| outdated("no name"))?,
@@ -384,7 +491,7 @@ impl ParfumoClient {
             // The main accords of the web page: the strongest shares of the "Type" chart.
             accords: classification
                 .iter()
-                .find(|g| g.group == "Type")
+                .find(|g| g.group == ACCORDS_GROUP)
                 .map(|g| g.shares.iter().take(MAX_ACCORDS).map(|s| s.label.clone()).collect())
                 .unwrap_or_default(),
             ratings,
@@ -408,6 +515,11 @@ impl ParfumoClient {
     /// its year and gender without the `p_` of the index. A document of the index only has
     /// the full name ("Sauvage (Eau de Toilette)"): it is kept whole, and no concentration
     /// is guessed out of it.
+    ///
+    /// Every listing served today (search, brand, perfumer, release year) is made of
+    /// documents of the index: all of them give the full name and no concentration. No read
+    /// lists the rows of `GET /search`, which is only asked for the brand of a lookup; what
+    /// is read of them here is for the day one does.
     pub(crate) fn summary_from_index_row(&self, row: &Value) -> Option<PerfumeSummary> {
         let (brand_url, name_url) = (text(row, "b_name_url")?, text(row, "p_name_url")?);
         let votes = count(row, "p_total_votings");
@@ -499,7 +611,7 @@ mod tests {
 
     use serde_json::{Value, json};
 
-    use super::{MAX_PERFUMES, remember};
+    use super::{MAX_PERFUMES, MAX_REFUSAL_CHARS, Unserved, refusal, remember};
     use crate::{ClientConfig, GlobalLimiter, ParfumoClient};
 
     fn client() -> ParfumoClient {
@@ -546,8 +658,24 @@ mod tests {
         assert_eq!(memory.into_iter().collect::<Vec<_>>(), [(4, 4)]);
     }
 
+    #[test]
+    fn a_refusal_is_an_absence_only_when_it_says_not_found() {
+        assert_eq!(refusal(&json!({"p": {}, "b": {}})), None);
+        assert_eq!(refusal(&json!({"status": "success", "error": null})), None);
+        // The refusal recorded for a brand the interface does not have.
+        assert_eq!(refusal(&json!({"error": "Brand not found"})), Some(Unserved::Absent));
+        assert_eq!(refusal(&json!({"status": "error", "message": "Perfume Not Found"})), Some(Unserved::Absent));
+        assert_eq!(refusal(&json!({"status": "error", "message": "Invalid type"})), Some(Unserved::Refused("Invalid type".into())));
+        assert_eq!(refusal(&json!({"error": true})), Some(Unserved::Refused(String::new())));
+        // Its words end in an error message: on one line, and not a page of them.
+        let long = refusal(&json!({"error": format!("Too\n busy {}", "x".repeat(1_000))}));
+        let Some(Unserved::Refused(words)) = long else { panic!("{long:?}") };
+        assert!(words.starts_with("Too busy x") && words.chars().count() == MAX_REFUSAL_CHARS, "{words}");
+    }
+
     /// The rows of the recorded `GET /search?filter=creed` name the perfume and its
-    /// concentration apart; the documents of the index (`GET /perfumes`) do not.
+    /// concentration apart; the documents of the index (`GET /perfumes`) do not. No read
+    /// lists such rows today: this only pins what the mapper makes of them.
     #[test]
     fn a_row_that_names_the_concentration_apart_gives_the_name_and_the_concentration() {
         let c = client();

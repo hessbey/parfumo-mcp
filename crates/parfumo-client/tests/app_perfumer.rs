@@ -40,9 +40,11 @@ fn long_listing() -> String {
 }
 
 /// Not recorded, built for the tests from the recorded record of a perfume: one made by two
-/// perfumers who bear the same name. Their numbers, slugs and name are made up.
+/// perfumers who bear the same name. Their numbers, slugs and name are made up. A record is
+/// the one of the number it is asked under: this one is served under 2.
 fn namesakes() -> String {
     let mut record: serde_json::Value = serde_json::from_str(PERFUME_DETAILS).unwrap();
+    record["p"]["id"] = "2".into();
     record["p"]["perfumers_array"] = serde_json::json!([
         {"id": "7001", "name": "Tést Namesake", "name_url": "Tst_Namesake"},
         {"id": "7002", "name": "Tést Namesake", "name_url": "Tst_Namesake_2"},

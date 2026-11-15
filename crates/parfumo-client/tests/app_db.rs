@@ -40,6 +40,11 @@ const UNKNOWN: u64 = 404_404;
 /// A number answered with a refusal in JSON under status 200, as the interface does for a
 /// brand it does not have (`docs/APP_API.md`); what it answers for a perfume was not recorded.
 const REFUSED: u64 = 500_500;
+/// A number answered under status 200 with a record that holds no perfume, as the interface
+/// does for a brand and a perfumer it does not have; not recorded for a perfume either.
+const EMPTY: u64 = 600_600;
+/// What such a record may look like.
+const NO_PERFUME: &str = r#"{"p":null,"b":null}"#;
 
 #[derive(Default)]
 struct Site {
@@ -57,6 +62,15 @@ impl Site {
     /// What was asked since the last look.
     fn take(&self) -> Vec<String> {
         std::mem::take(&mut *self.asked.lock().unwrap())
+    }
+
+    /// Serves under `number` the recorded record, given that number and changed by `change`.
+    fn serve(&self, number: u64, change: impl FnOnce(&mut Value)) {
+        let answer = record(|r| {
+            r["p"]["id"] = number.to_string().into();
+            change(r);
+        });
+        self.records.lock().unwrap().insert(number, answer);
     }
 }
 
@@ -382,70 +396,149 @@ async fn a_chart_keeps_its_name_and_its_votes_whatever_the_other_charts_are() {
     let (c, site) = logged_in().await;
     // Not recorded: the recorded record with its Season chart missing, then with its charts
     // sent as objects keyed by position, the other shape the interface uses for a list.
-    site.records.lock().unwrap().insert(1, record(|r| r["c"][1] = Value::Null));
+    site.serve(1, |r| r["c"][1] = Value::Null);
     let p = c.get_perfume("1").await.unwrap();
     assert_eq!(groups(&p), [("Type", Some(6884), "Fresh"), ("Occasion", Some(7712), "Daily"), ("Audience & Style", Some(3848), "Masculine")]);
     assert_eq!(p.accords[0], "Fresh");
+    // Votes are counted for that chart and the web record has it: the one missing here is named.
+    assert_eq!(p.warnings.len(), 1, "{:?}", p.warnings);
+    assert!(p.warnings[0].starts_with("classification: the \"Season\" chart"), "{:?}", p.warnings);
 
-    site.records.lock().unwrap().insert(
-        2,
-        record(|r| {
-            let keyed = |list: &Value| Value::Object(list.as_array().unwrap().iter().enumerate().map(|(i, v)| (i.to_string(), v.clone())).collect());
-            let charts: Vec<Value> = r["c"].as_array().unwrap().iter().map(keyed).collect();
-            r["c"] = keyed(&Value::Array(charts));
-        }),
-    );
+    // No chart beside a count of no votes: nobody voted, and there is nothing to tell.
+    site.serve(3, |r| {
+        r["c"][1] = Value::Null;
+        r["c_total"][1] = 0.into();
+    });
+    let p = c.get_perfume("3").await.unwrap();
+    assert_eq!(groups(&p).len(), 3);
+    assert!(p.warnings.is_empty(), "{:?}", p.warnings);
+    site.serve(4, |r| {
+        r["c"] = json!([]);
+        r["c_total"] = json!([]);
+    });
+    let p = c.get_perfume("4").await.unwrap();
+    assert!(p.classification.is_empty() && p.warnings.is_empty(), "{:?}", p.warnings);
+
+    // A chart that is not a list is one that cannot be read, whatever its count.
+    site.serve(5, |r| r["c"][2] = "none".into());
+    let p = c.get_perfume("5").await.unwrap();
+    assert_eq!(groups(&p), [("Type", Some(6884), "Fresh"), ("Season", Some(5733), "Spring"), ("Audience & Style", Some(3848), "Masculine")]);
+    assert_eq!(p.warnings.len(), 1, "{:?}", p.warnings);
+    assert!(p.warnings[0].starts_with("classification: the \"Occasion\" chart"), "{:?}", p.warnings);
+
+    site.serve(2, |r| {
+        let keyed = |list: &Value| Value::Object(list.as_array().unwrap().iter().enumerate().map(|(i, v)| (i.to_string(), v.clone())).collect());
+        let charts: Vec<Value> = r["c"].as_array().unwrap().iter().map(keyed).collect();
+        r["c"] = keyed(&Value::Array(charts));
+    });
     let keyed = c.get_perfume("2").await.unwrap();
     assert_eq!(keyed.classification, c.get_perfume("9438").await.unwrap().classification);
+    assert!(keyed.warnings.is_empty(), "{:?}", keyed.warnings);
+}
+
+#[tokio::test]
+async fn a_pie_chart_with_a_slice_that_cannot_be_read_is_left_out_and_told() {
+    let (c, site) = logged_in().await;
+    // Not recorded: the recorded record with the share of its strongest type missing. The
+    // other types must not be scaled up to fill its place (Fruity 21% would become 27%).
+    site.serve(1, |r| {
+        let fresh = r["c"][0].as_array_mut().unwrap().iter_mut().find(|s| s["n"] == "Fresh").unwrap();
+        fresh.as_object_mut().unwrap().remove("p");
+    });
+    let p = c.get_perfume("1").await.unwrap();
+    assert_eq!(groups(&p), [("Occasion", Some(7712), "Daily"), ("Season", Some(5733), "Spring"), ("Audience & Style", Some(3848), "Masculine")]);
+    assert!(p.accords.is_empty(), "the accords are the strongest types: {:?}", p.accords);
+    assert_eq!(p.warnings.len(), 1, "{:?}", p.warnings);
+    assert!(p.warnings[0].starts_with("classification: the \"Type\" chart") && p.warnings[0].contains("accords"), "{:?}", p.warnings);
+
+    // A slice without its name is no better.
+    site.serve(2, |r| {
+        r["c"][2][0].as_object_mut().unwrap().remove("n");
+    });
+    let p = c.get_perfume("2").await.unwrap();
+    assert!(p.classification.iter().all(|g| g.group != "Occasion"), "{:?}", p.classification);
+    assert_eq!(p.warnings.len(), 1, "{:?}", p.warnings);
+    assert!(p.warnings[0].starts_with("classification: the \"Occasion\" chart"), "{:?}", p.warnings);
+
+    // A slice nobody voted for takes no room and hides nothing.
+    site.serve(3, |r| r["c"][1].as_array_mut().unwrap().push(json!({"ct": 99, "n": "Monsoon", "v": "0", "p": "0"})));
+    let p = c.get_perfume("3").await.unwrap();
+    assert_eq!(shares(&p, "Season"), [("Spring", 32.0), ("Summer", 30.6), ("Fall", 23.8), ("Winter", 13.7)]);
+    assert!(p.warnings.is_empty(), "{:?}", p.warnings);
+}
+
+#[tokio::test]
+async fn poles_left_out_when_the_others_add_up_to_100_hold_nothing_and_both_pairs_are_rebuilt() {
+    let (c, site) = logged_in().await;
+    // Not recorded: the recorded record with two poles only, one of each pair, their shares
+    // scaled to add up to 100. The interface leaves the weakest pole out; when the others
+    // leave nothing of 100, every pole left out holds nothing, as on the web chart
+    // (Masculine 100, Feminine 0).
+    site.serve(1, |r| {
+        let chart = r["c"][3].as_array_mut().unwrap();
+        chart.retain(|s| s["n"] == "Masculine" || s["n"] == "Modern");
+        let listed: f64 = chart.iter().map(|s| s["p"].as_str().unwrap().parse::<f64>().unwrap()).sum();
+        for slice in chart.iter_mut() {
+            let share: f64 = slice["p"].as_str().unwrap().parse().unwrap();
+            slice["p"] = format!("{:.4}", share / listed * 100.0).into();
+        }
+    });
+    let p = c.get_perfume("1").await.unwrap();
+    assert_eq!(shares(&p, "Audience & Style"), [("Masculine", 100.0), ("Feminine", 0.0), ("Modern", 100.0), ("Classic", 0.0)]);
+    assert!(p.warnings.is_empty(), "{:?}", p.warnings);
+
+    // The other pole of each pair, named by its number alone.
+    site.serve(2, |r| r["c"][3] = json!([{"ct": 1, "p": "50"}, {"ct": 3, "p": "50"}]));
+    let p = c.get_perfume("2").await.unwrap();
+    assert_eq!(shares(&p, "Audience & Style"), [("Masculine", 0.0), ("Feminine", 100.0), ("Modern", 100.0), ("Classic", 0.0)]);
+    assert!(p.warnings.is_empty(), "{:?}", p.warnings);
+
+    // Every vote on one pole: its pair is whole, and nobody chose between the two others.
+    // That is no chart for them, and nothing is lost.
+    site.serve(3, |r| r["c"][3] = json!([{"ct": 2, "p": "100"}]));
+    let p = c.get_perfume("3").await.unwrap();
+    assert_eq!(shares(&p, "Audience & Style"), [("Masculine", 100.0), ("Feminine", 0.0)]);
+    assert!(p.warnings.is_empty(), "{:?}", p.warnings);
 }
 
 #[tokio::test]
 async fn a_pair_of_audience_and_style_that_cannot_be_rebuilt_is_left_out_and_told() {
     let (c, site) = logged_in().await;
-    let poles = |keep: &[&str]| {
-        let keep: Vec<String> = keep.iter().map(|k| k.to_string()).collect();
-        record(move |r| r["c"][3].as_array_mut().unwrap().retain(|s| keep.iter().any(|k| s["n"] == k.as_str())))
-    };
+    let poles = |number: u64, keep: &[&str]| site.serve(number, |r| r["c"][3].as_array_mut().unwrap().retain(|s| keep.iter().any(|k| s["n"] == *k)));
     // Not recorded: the recorded record with fewer poles. With Modern alone of its pair,
     // and Feminine missing too, what is left of 100 cannot be shared between the two.
-    site.records.lock().unwrap().insert(1, poles(&["Masculine", "Modern"]));
+    poles(1, &["Masculine", "Modern"]);
     let p = c.get_perfume("1").await.unwrap();
     assert!(p.classification.iter().all(|g| g.group != "Audience & Style"), "no raw share is shown: {:?}", p.classification);
     assert_eq!(p.warnings.len(), 2, "{:?}", p.warnings);
     assert!(p.warnings[0].contains("Masculine/Feminine") && p.warnings[1].contains("Modern/Classic"), "{:?}", p.warnings);
 
     // A whole pair missing: the other one is still a pair of its own.
-    site.records.lock().unwrap().insert(2, poles(&["Classic", "Modern"]));
+    poles(2, &["Classic", "Modern"]);
     let p = c.get_perfume("2").await.unwrap();
     assert_eq!(shares(&p, "Audience & Style"), [("Modern", 55.7), ("Classic", 44.3)]);
     assert_eq!(p.warnings.len(), 1, "{:?}", p.warnings);
     assert!(p.warnings[0].starts_with("classification: the Masculine/Feminine shares"), "{:?}", p.warnings);
 
     // A perfume nobody classified has no chart, and that is not worth a warning.
-    site.records.lock().unwrap().insert(3, record(|r| r["c"] = json!([[], [], [], []])));
+    site.serve(3, |r| r["c"] = json!([[], [], [], []]));
     let p = c.get_perfume("3").await.unwrap();
     assert!(p.classification.is_empty() && p.accords.is_empty() && p.warnings.is_empty(), "{:?}", p.warnings);
 
     // The four poles listed: nothing to restore, the same two pairs.
-    site.records.lock().unwrap().insert(
-        4,
-        record(|r| {
-            let listed: f64 = r["c"][3].as_array().unwrap().iter().map(|s| s["p"].as_str().unwrap().parse::<f64>().unwrap()).sum();
-            r["c"][3].as_array_mut().unwrap().push(json!({"ct": 1, "n": "Feminine", "v": "131", "p": format!("{}", 100.0 - listed)}));
-        }),
-    );
+    site.serve(4, |r| {
+        let listed: f64 = r["c"][3].as_array().unwrap().iter().map(|s| s["p"].as_str().unwrap().parse::<f64>().unwrap()).sum();
+        r["c"][3].as_array_mut().unwrap().push(json!({"ct": 1, "n": "Feminine", "v": "131", "p": format!("{}", 100.0 - listed)}));
+    });
     let p = c.get_perfume("4").await.unwrap();
     assert_eq!(shares(&p, "Audience & Style"), [("Masculine", 93.6), ("Feminine", 6.4), ("Modern", 55.7), ("Classic", 44.3)]);
     assert!(p.warnings.is_empty(), "{:?}", p.warnings);
 
     // A pole listed without its share: what is left of 100 is not the share of the missing
     // one, and nothing is made of the chart.
-    site.records.lock().unwrap().insert(
-        5,
-        record(|r| {
-            r["c"][3][0].as_object_mut().unwrap().remove("p");
-        }),
-    );
+    site.serve(5, |r| {
+        r["c"][3][0].as_object_mut().unwrap().remove("p");
+    });
     let p = c.get_perfume("5").await.unwrap();
     assert!(p.classification.iter().all(|g| g.group != "Audience & Style"), "{:?}", p.classification);
     assert_eq!(p.warnings.len(), 2, "{:?}", p.warnings);
@@ -456,20 +549,17 @@ async fn facts_and_description_are_plain_text_and_never_the_german_ones() {
     let (c, site) = logged_in().await;
     // Not recorded: the recorded record has no facts. The same record with English facts
     // and a description written with the markup of the site, and German facts beside them.
-    site.records.lock().unwrap().insert(
-        1,
-        record(|r| {
-            r["p"]["info_en"] = "First fact.<br />\r\nSecond fact, by <a href=\"/Perfumers/x\">someone</a> &amp; co.".into();
-            r["p"]["info"] = "Deutsche Fakten.".into();
-            r["p"]["desc"] = "A perfume by <b>Creed</b> &amp; friends.".into();
-        }),
-    );
+    site.serve(1, |r| {
+        r["p"]["info_en"] = "First fact.<br />\r\nSecond fact, by <a href=\"/Perfumers/x\">someone</a> &amp; co.".into();
+        r["p"]["info"] = "Deutsche Fakten.".into();
+        r["p"]["desc"] = "A perfume by <b>Creed</b> &amp; friends.".into();
+    });
     let p = c.get_perfume("1").await.unwrap();
     assert_eq!(p.facts.as_deref(), Some("First fact.\nSecond fact, by someone & co."));
     assert_eq!(p.description.as_deref(), Some("A perfume by Creed & friends."));
 
     // German facts alone: the English page shows none, and neither does the record.
-    site.records.lock().unwrap().insert(2, record(|r| r["p"]["info"] = "Deutsche Fakten.".into()));
+    site.serve(2, |r| r["p"]["info"] = "Deutsche Fakten.".into());
     assert_eq!(c.get_perfume("2").await.unwrap().facts, None);
 }
 
@@ -539,18 +629,80 @@ async fn a_number_the_interface_does_not_have_is_not_found_and_a_remembered_one_
     }
 
     // A number remembered for an id, which the interface no longer has (a perfume merged or
-    // removed since): the web page of the id answers, and the number is forgotten.
-    let gone = PERFUMES_BRAND.replace("\"p_id\": \"225233\"", &format!("\"p_id\": \"{UNKNOWN}\""));
-    assert_ne!(gone, PERFUMES_BRAND);
-    *site.perfumes.lock().unwrap() = Some(gone);
+    // removed since), by a 404 or by a record without the perfume: the web page of the id
+    // answers, and the number is forgotten.
+    for number in [UNKNOWN, EMPTY] {
+        let (c, site) = logged_in().await;
+        site.records.lock().unwrap().insert(EMPTY, NO_PERFUME.into());
+        let gone = PERFUMES_BRAND.replace("\"p_id\": \"225233\"", &format!("\"p_id\": \"{number}\""));
+        assert_ne!(gone, PERFUMES_BRAND);
+        *site.perfumes.lock().unwrap() = Some(gone);
+        c.search_perfumes(&by_year(2023), 1).await.unwrap();
+        site.take();
+        let err = c.get_perfume("Creed/absolu-aventus").await.unwrap_err();
+        assert_eq!(site.take(), [format!("/app/v1/perfume_details/{number}"), "/Perfumes/Creed/absolu-aventus".to_string()]);
+        assert_eq!(err, ClientError::NotFound("/Perfumes/Creed/absolu-aventus".into()));
+        *site.perfumes.lock().unwrap() = None;
+        let _ = c.get_perfume("Creed/absolu-aventus").await;
+        assert_eq!(site.take()[0], "/app/v1/search?filter=Creed", "looked up afresh");
+    }
+}
+
+#[tokio::test]
+async fn a_record_without_the_perfume_is_a_number_the_interface_does_not_have() {
+    let (c, site) = logged_in().await;
+    // Not recorded: what the interface answers under status 200 for a number it has nothing
+    // under. A brand and a perfumer it does not have come as a record without them.
+    for (number, nothing) in [(1u64, NO_PERFUME), (2, r#"{"p":false,"b":false}"#), (3, r#"{"p":[],"b":[]}"#), (4, "{}")] {
+        site.records.lock().unwrap().insert(number, nothing.into());
+        let err = c.get_perfume(&number.to_string()).await.unwrap_err();
+        assert_eq!(err, ClientError::NotFound(format!("/perfume_details/{number}")), "{nothing}");
+        assert_eq!(site.take(), [format!("/app/v1/perfume_details/{number}")], "and no web page is asked");
+    }
+    // The record of another perfume than the one asked is not the answer either.
+    site.records.lock().unwrap().insert(5, PERFUME_DETAILS.into());
+    assert_eq!(c.get_perfume("5").await.unwrap_err(), ClientError::NotFound("/perfume_details/5".into()));
+
+    // A record that has the perfume and lacks a part of it is a change of the interface.
+    site.serve(6, |r| {
+        r["p"].as_object_mut().unwrap().remove("name_url");
+    });
+    assert_eq!(c.get_perfume("6").await.unwrap_err(), ClientError::ParserOutdated("/app/v1/perfume_details: no perfume id".into()));
+    site.serve(7, |r| r["b"] = Value::Null);
+    assert_eq!(c.get_perfume("7").await.unwrap_err(), ClientError::ParserOutdated("/app/v1/perfume_details: no brand".into()));
+}
+
+#[tokio::test]
+async fn a_refusal_that_does_not_say_not_found_is_not_a_perfume_that_does_not_exist() {
+    let (c, site) = logged_in().await;
+    // Not recorded: a refusal worded in JSON under status 200 that is about something else
+    // than the perfume. A bare number has no web page to fall back to: the refusal is
+    // reported as one, with the words of the interface.
+    let busy = r#"{"status":"error","message":"Service temporarily unavailable"}"#;
+    site.records.lock().unwrap().insert(1, busy.into());
+    let err = c.get_perfume("1").await.unwrap_err();
+    assert_eq!(err, ClientError::Upstream("/app/v1/perfume_details/1 was refused: Service temporarily unavailable".into()));
+    assert_eq!(site.take(), ["/app/v1/perfume_details/1"], "and no web page is asked");
+    site.records.lock().unwrap().insert(2, r#"{"status":"error"}"#.into());
+    assert_eq!(c.get_perfume("2").await.unwrap_err(), ClientError::Upstream("/app/v1/perfume_details/2 was refused".into()));
+    // Words that repeat the session token are not passed on.
+    site.records.lock().unwrap().insert(3, r#"{"error":"Session tok is busy"}"#.into());
+    assert_eq!(c.get_perfume("3").await.unwrap_err(), ClientError::Upstream("/app/v1/perfume_details/3 was refused".into()));
+    site.take();
+
+    // Behind a remembered id the web page answers, and the number is kept: nothing says
+    // that it is not the number of the perfume any more.
+    let number = 700_700;
+    site.records.lock().unwrap().insert(number, busy.into());
+    *site.perfumes.lock().unwrap() = Some(PERFUMES_BRAND.replace("\"p_id\": \"225233\"", &format!("\"p_id\": \"{number}\"")));
     c.search_perfumes(&by_year(2023), 1).await.unwrap();
     site.take();
-    let err = c.get_perfume("Creed/absolu-aventus").await.unwrap_err();
-    assert_eq!(site.take(), [format!("/app/v1/perfume_details/{UNKNOWN}"), "/Perfumes/Creed/absolu-aventus".to_string()]);
-    assert_eq!(err, ClientError::NotFound("/Perfumes/Creed/absolu-aventus".into()));
-    *site.perfumes.lock().unwrap() = None;
-    let _ = c.get_perfume("Creed/absolu-aventus").await;
-    assert_eq!(site.take()[0], "/app/v1/search?filter=Creed", "looked up afresh");
+    for _ in 0..2 {
+        let err = c.get_perfume("Creed/absolu-aventus").await.unwrap_err();
+        assert_eq!(site.take(), [format!("/app/v1/perfume_details/{number}"), "/Perfumes/Creed/absolu-aventus".to_string()]);
+        assert_eq!(err, ClientError::NotFound("/Perfumes/Creed/absolu-aventus".into()), "the web site answers, and the fake has no such page");
+    }
+    assert!(c.has_app_session(), "none of this is a refusal of the session");
 }
 
 // ---------------------------------------------------------------------------
