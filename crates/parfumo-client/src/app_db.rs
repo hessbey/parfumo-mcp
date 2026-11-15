@@ -320,7 +320,7 @@ impl ParfumoClient {
             Ok(answer) => Ok(match refusal(&answer) {
                 // The words of a refusal end in an error message, where the session token
                 // must never be: words that repeat it are not passed on.
-                Some(Unserved::Refused(words)) if self.t.app_token().is_some_and(|token| !token.is_empty() && words.contains(&token)) => {
+                Some(Unserved::Refused(words)) if self.t.user.app.token().is_some_and(|token| !token.is_empty() && words.contains(&token)) => {
                     Err(Unserved::Refused(String::new()))
                 }
                 Some(why) => Err(why),

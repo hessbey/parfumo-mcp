@@ -335,6 +335,14 @@ impl Sessions {
         self.client_on(self.limiter(user_id).web_only())
     }
 
+    /// A client of its own, without account cookies, on everything the clients of `user_id`
+    /// share: the request slot and the session of the application interface. It reads as
+    /// the public client of a tool call does, and remembers nothing from an earlier read
+    /// (the canary checks every lookup from the start).
+    pub fn uncached_app_client(&self, user_id: i64) -> Result<ParfumoClient, SessionError> {
+        self.new_client(user_id)
+    }
+
     /// Stores a new link of `user_id` and makes it the one this process follows, as one
     /// step. What was kept in memory for the previous link is dropped first: the cookies
     /// stored with the new link cannot carry the session token of the previous account,
