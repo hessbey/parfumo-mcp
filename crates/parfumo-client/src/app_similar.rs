@@ -100,6 +100,9 @@ impl ParfumoClient {
         for item in similar.iter_mut().take(opts.resolve_urls).filter(|item| item.id.is_none()) {
             match self.app_get_perfume(&item.p_id.to_string()).await {
                 Ok(record) => self.link(item, record.id),
+                // The session ended, or the interface asks to wait, in the middle of the
+                // read: the web site serves all of it, rather than this answer cut short.
+                Err(e) if crate::app::hands_over(&e) => return Err(e),
                 Err(e) => {
                     warnings.push(format!("links of similar perfumes not resolved: {e}"));
                     break;
@@ -118,6 +121,7 @@ impl ParfumoClient {
                     warnings.push("layering suggestions unavailable: the application interface answered the list of similar perfumes".into());
                 }
                 Ok(list) => layering = list,
+                Err(e) if crate::app::hands_over(&e) => return Err(e),
                 Err(e) => warnings.push(format!("layering suggestions unavailable: {e}")),
             }
         }

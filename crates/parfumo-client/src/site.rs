@@ -279,12 +279,15 @@ pub mod routes {
     }
 
     /// Path prefixes `fetch_page` refuses (internal interfaces, account deletion,
-    /// password / e-mail changes, mobile API).
+    /// password / e-mail changes, mobile API). `/app/` is the application interface: a
+    /// page read carries no session token, and the site blocks an address after a few
+    /// requests without one.
     pub const FETCH_FORBIDDEN_PREFIXES: &[&str] = &[
         "/api/",
         "/api",
         "/action/",
         "/action_fdb/",
+        "/app/",
         "/app_v5/",
         "/account/delete",
         "/account/password",
