@@ -22,7 +22,7 @@
 use std::{future::Future, time::Instant};
 
 use parfumo_client::{
-    BlogFeed, ClientError, Listing, ParfumoClient, PerfumeDetails, PerfumeSummary, RankingKind, ReviewSort, SearchQuery, SettingsPage,
+    BlogFeed, ClientError, Completed, Listing, ParfumoClient, PerfumeDetails, PerfumeSummary, RankingKind, ReviewSort, SearchQuery, SettingsPage,
     SimilarOptions, SimilarPerfumes, SoukKind, TextKind, site::routes,
 };
 use serde::{Deserialize, Serialize};
@@ -671,6 +671,20 @@ fn interface_record(p: &PerfumeDetails) -> Result<String, String> {
     Ok(format!("{notes} notes, {} ratings, {} classification groups", p.ratings.len(), p.classification.len()))
 }
 
+/// A read of the interface that a page of the web site completes, as the canary judges it.
+/// The tools get the answer with a warning, whatever kept the page from being read. Here a
+/// site that asks to stop (a captcha, a rate limit) or cannot be reached is the error of the
+/// read, as it is for a plain web read: it is no changed structure, and the first two stop
+/// the run. A page that is gone or can no longer be parsed did change: the answer keeps its
+/// warning, which [`unwarned`] reports.
+async fn completed<T>(read: impl Future<Output = Result<Completed<T>, ClientError>>) -> Result<T, ClientError> {
+    let Completed { value, web_error } = read.await?;
+    match web_error {
+        Some(e @ (ClientError::CaptchaRequired | ClientError::RateLimited { .. } | ClientError::Upstream(_))) => Err(e),
+        _ => Ok(value),
+    }
+}
+
 /// A read of the interface that a page of the web site completes says so when the page
 /// could not be read, or when a part of its own is missing.
 fn unwarned(warnings: &[String]) -> Result<(), String> {
@@ -707,8 +721,8 @@ async fn interface_checks(r: &mut Runner, lent: &Lent<'_>, web_p_id: Option<u64>
     r.check_interface(lent, "own nickname", "own_nick", c.own_nick(), None, |n| filled(n, "nickname").map(|()| "found".to_string())).await;
     let query = SearchQuery { text: Some(SEARCH_TEXT.into()), ..SearchQuery::default() };
     r.check_interface(lent, "search", "search_perfumes", c.search_perfumes(&query, 1), None, |l| index_rows(l, "results")).await;
-    let perfume = r.check_interface(lent, "perfume", "get_perfume", c.get_perfume(PERFUME), None, interface_record).await;
-    r.check_interface(lent, "brand", "get_brand", c.get_brand(BRAND, 1), None, |b| {
+    let perfume = r.check_interface(lent, "perfume", "get_perfume", completed(c.get_perfume_completed(PERFUME)), None, interface_record).await;
+    r.check_interface(lent, "brand", "get_brand", completed(c.get_brand_completed(BRAND, 1)), None, |b| {
         filled(&b.brand.name, "brand name")?;
         // The country is read on the web page of the brand: the reader warns when it could not.
         unwarned(&b.warnings)?;
@@ -717,7 +731,7 @@ async fn interface_checks(r: &mut Runner, lent: &Lent<'_>, web_p_id: Option<u64>
     .await;
     match perfume.as_ref().and_then(|p| p.perfumers.first()) {
         Some(perfumer) => {
-            r.check_interface(lent, "perfumer", "get_perfumer", c.get_perfumer(&perfumer.id, 1), None, |b| {
+            r.check_interface(lent, "perfumer", "get_perfumer", completed(c.get_perfumer_completed(&perfumer.id, 1)), None, |b| {
                 filled(&b.perfumer.name, "perfumer name")?;
                 unwarned(&b.warnings)?;
                 index_rows(&b.perfumes, "perfumes")
@@ -1098,6 +1112,27 @@ mod tests {
             assert!(r.checks[1].detail.contains("run stopped after `first`"));
             assert_eq!(r.status(), "inconclusive", "a refusal is not a changed structure");
         }
+    }
+
+    /// What the canary makes of the page that completes a read of the application
+    /// interface: the tools get a warning for all of these.
+    #[tokio::test]
+    async fn a_completing_page_that_asks_to_stop_or_cannot_be_reached_is_the_error_of_the_read() {
+        let read = |web_error| completed(async move { Ok::<_, ClientError>(Completed { value: 1, web_error }) });
+        assert_eq!(read(None).await, Ok(1));
+        for e in [
+            ClientError::CaptchaRequired,
+            ClientError::RateLimited { retry_after_secs: None },
+            ClientError::Upstream("HTTP 503 on /Perfumes/Dior".into()),
+        ] {
+            assert_eq!(read(Some(e.clone())).await, Err(e), "judged as a web read is: failed, and the first two stop the run");
+        }
+        // The page changed: the answer is judged, and its warning says what is missing.
+        for e in [ClientError::NotFound("/Perfumes/Dior".into()), ClientError::ParserOutdated("brand head".into()), ClientError::LoginRequired] {
+            assert_eq!(read(Some(e)).await, Ok(1));
+        }
+        let failed = completed(async { Err::<Completed<u32>, _>(ClientError::NotFound("/perfume_details/1".into())) });
+        assert_eq!(failed.await, Err(ClientError::NotFound("/perfume_details/1".into())), "the error of the interface is its own");
     }
 
     #[tokio::test]

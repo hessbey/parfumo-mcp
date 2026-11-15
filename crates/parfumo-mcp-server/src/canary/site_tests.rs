@@ -73,6 +73,18 @@ impl Asked {
 /// What a test makes happen once the stand-in has answered a call made as a member.
 type AfterMemberCall = Box<dyn FnMut(&Asked) + Send>;
 
+/// What a page that completes a read of the interface answers in place of its recorded page.
+#[derive(Clone, Copy)]
+struct PageTrouble {
+    page: &'static str,
+    status: StatusCode,
+    body: &'static str,
+}
+
+/// A page with which the web site asks for a human. Not recorded: the title is the one the
+/// client knows a challenge of Cloudflare by.
+const CHALLENGE: &str = "<html><head><title>Just a moment...</title></head></html>";
+
 /// The search of the `search` check, the second read of the area, and the listing of the
 /// `release year` check: each is the only call of its check.
 const SEARCH_CALL: &str = "filter=sauvage";
@@ -93,6 +105,9 @@ struct Parfumo {
     /// the interface leaves both to the panels of the web site.
     own_reads_for_the_web_panels: Arc<AtomicBool>,
     after_member_call: Arc<Mutex<Option<AfterMemberCall>>>,
+    /// What one completing page answers once a call was made as a member: the `public`
+    /// area, which reads the same pages before, gets the recorded ones.
+    page_trouble: Arc<Mutex<Option<PageTrouble>>>,
 }
 
 impl Parfumo {
@@ -127,6 +142,16 @@ impl Parfumo {
                 site.app_live.lock().unwrap().clear();
             }
         });
+    }
+
+    fn page_trouble(&self, page: &'static str, status: StatusCode, body: &'static str) {
+        *self.page_trouble.lock().unwrap() = Some(PageTrouble { page, status, body });
+    }
+
+    /// What a completing page answers now in place of its recorded page, if anything.
+    fn trouble_of(&self, page: &str) -> Option<PageTrouble> {
+        let trouble = self.page_trouble.lock().unwrap().filter(|trouble| trouble.page == page)?;
+        self.asked.lock().unwrap().iter().any(Asked::member_call).then_some(trouble)
     }
 }
 
@@ -244,7 +269,10 @@ async fn handler(State(parfumo): State<Parfumo>, method: Method, uri: Uri, heade
     let answer = if asked.member_call() {
         interface(&parfumo, asked.call().unwrap_or_default(), uri.query().unwrap_or_default(), asked.bearer.as_deref())
     } else if let Some(page) = completing_page(uri.path()) {
-        Html(fixture(page)).into_response()
+        match parfumo.trouble_of(uri.path()) {
+            Some(trouble) => (trouble.status, Html(trouble.body)).into_response(),
+            None => Html(fixture(page)).into_response(),
+        }
     } else {
         web_site(&parfumo, method, &target, &headers, body).await
     };
@@ -271,6 +299,7 @@ async fn stand_in(user_min_interval: Duration) -> (TestApp, Parfumo, User) {
         brand_on_the_web_only: Arc::default(),
         own_reads_for_the_web_panels: Arc::default(),
         after_member_call: Arc::default(),
+        page_trouble: Arc::default(),
     };
     let router = Router::new().fallback(handler).with_state(parfumo.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -582,6 +611,79 @@ async fn a_token_refused_to_a_tool_call_is_not_sent_by_the_canary() {
     // The token the account obtained is still its own after the run.
     assert!(sessions.client_for(user.id).unwrap().has_app_session());
     assert_eq!(asked.iter().filter(|a| a.call() == Some(LOGIN)).count(), 1);
+}
+
+/// The interface answers the record of the perfume; the web page that completes it asks
+/// for a human. The tools return the record with a warning. For the canary it is the
+/// captcha of any web read: no verdict, and nothing more is sent.
+#[tokio::test]
+async fn a_captcha_on_a_completing_page_stops_the_run() {
+    let (app, parfumo, user) = linked_stand_in().await;
+    parfumo.page_trouble("/Perfumes/Dior/Sauvage_Eau_de_Toilette", StatusCode::FORBIDDEN, CHALLENGE);
+    let report = run(&app.state, Some(&user)).await;
+
+    let checks = area(&report, INTERFACE);
+    let mut expected = vec![("own nickname", Outcome::Ok), ("search", Outcome::Ok), ("perfume", Outcome::Failed)];
+    expected.extend(NAMES[3..].iter().map(|name| (*name, Outcome::Skipped)));
+    assert_eq!(outcomes(&checks), expected, "{}", report.text());
+    let perfume = check(&report, INTERFACE, "perfume");
+    assert_eq!(perfume.detail, ClientError::CaptchaRequired.to_string());
+    for c in checks[3..].iter().chain(&area(&report, "account")) {
+        // The page of the perfumer has a reason of its own: the record that names it.
+        let why = if c.name == "perfumer" { "needs the perfumer" } else { "run stopped after `perfume`: Parfumo requires a human verification" };
+        assert!(c.detail.contains(why), "{}: {}", c.name, c.detail);
+    }
+    assert_eq!(area(&report, "account").len(), 1, "{}", report.text());
+    assert_eq!(interface_verdict(&report), "inconclusive", "a captcha is not a changed structure");
+
+    // The interface had answered; the challenge is the last thing the site was asked for.
+    let asked = parfumo.asked();
+    let last = asked.last().unwrap();
+    assert_eq!((last.path(), last.status), ("/Perfumes/Dior/Sauvage_Eau_de_Toilette", 403), "{last:?}");
+    assert!(asked.iter().any(|a| a.call() == Some("/perfume_details/9438") && a.status == 200));
+    assert!(!asked.iter().any(|a| a.call() == Some("/brand_details")), "the next check was sent");
+}
+
+/// The web page that completes the brand cannot be reached. That is no verdict on the
+/// structure of anything, and no reason to stop: the checks that follow are made.
+///
+/// The client tries the page again three times, two, four and eight seconds apart, as it
+/// does for a tool; the server has no setting for it, so this test lasts as long.
+#[tokio::test]
+async fn an_outage_of_a_completing_page_is_a_failed_check_and_the_run_goes_on() {
+    let (app, parfumo, user) = linked_stand_in().await;
+    // Not recorded: any page under status 503 is an outage for the client.
+    parfumo.page_trouble("/Perfumes/Dior", StatusCode::SERVICE_UNAVAILABLE, "<html><body>Service Unavailable</body></html>");
+    let report = run(&app.state, Some(&user)).await;
+
+    let checks = area(&report, INTERFACE);
+    let expected: Vec<(&str, Outcome)> = NAMES.iter().map(|name| (*name, if *name == "brand" { Outcome::Failed } else { Outcome::Ok })).collect();
+    assert_eq!(outcomes(&checks), expected, "{}", report.text());
+    let brand = check(&report, INTERFACE, "brand");
+    assert_eq!(brand.detail, "upstream error: HTTP 503 on /Perfumes/Dior");
+    assert_eq!(interface_verdict(&report), "inconclusive", "an outage is not a changed structure");
+    // The interface itself answered the brand, and the account is read as on any day.
+    let asked = parfumo.asked();
+    assert!(asked.iter().any(|a| a.call() == Some("/brand_details") && a.status == 200));
+    assert_eq!(asked.iter().filter(|a| a.path() == "/Perfumes/Dior" && a.status == 503).count(), 4);
+    assert_eq!(check(&report, "account", "own nickname").outcome, Outcome::Ok);
+}
+
+/// The web page that completes the perfumer is gone. That page did change: the answer of
+/// the interface comes with the warning of the reader, and the check says so.
+#[tokio::test]
+async fn a_completing_page_that_is_gone_is_a_changed_page() {
+    let (app, parfumo, user) = linked_stand_in().await;
+    // Not recorded: any page under status 404 is a missing page for the client.
+    parfumo.page_trouble("/Perfumers/JeanChristophe_Herault", StatusCode::NOT_FOUND, "<html><body>Not found</body></html>");
+    let report = run(&app.state, Some(&user)).await;
+
+    let checks = area(&report, INTERFACE);
+    let expected: Vec<(&str, Outcome)> = NAMES.iter().map(|name| (*name, if *name == "perfumer" { Outcome::Changed } else { Outcome::Ok })).collect();
+    assert_eq!(outcomes(&checks), expected, "{}", report.text());
+    let perfumer = check(&report, INTERFACE, "perfumer");
+    assert_eq!(perfumer.detail, "parsed, but the reader warns: country unavailable: not found: /Perfumers/JeanChristophe_Herault");
+    assert_eq!(interface_verdict(&report), "changed");
 }
 
 #[tokio::test]
