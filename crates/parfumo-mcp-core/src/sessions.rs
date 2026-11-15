@@ -620,6 +620,17 @@ impl Drop for StoreAppSession<'_> {
     }
 }
 
+/// What is left of [`LOGIN_BACKOFF`] after a renewal made `here`, by this process, that long
+/// ago, and one `recorded` on the link that long ago. The latest one counts: a renewal of
+/// this process does not hide a later one, made by a process running beside it.
+fn renewal_pause_left(here: Option<Duration>, recorded: Option<Duration>) -> Option<Duration> {
+    let since = match (here, recorded) {
+        (Some(here), Some(recorded)) => here.min(recorded),
+        (here, recorded) => here.or(recorded)?,
+    };
+    LOGIN_BACKOFF.checked_sub(since).filter(|left| !left.is_zero())
+}
+
 /// Whether a link, as it was last read, may log in to the application interface at all:
 /// credentials are stored, the interface did not refuse them, and the web site is not
 /// waiting for a human or for its own pause to end.
@@ -639,13 +650,13 @@ impl Sessions {
 
     /// What is left of [`LOGIN_BACKOFF`] since the session of the application interface of
     /// `user_id` was last renewed, when it was renewed that recently: by this process, or
-    /// else by an earlier one, as `link` records it.
+    /// by another one, earlier or running beside it, as `link` records it.
     fn app_renewed_recently(&self, user_id: i64, link: &crate::db::LinkRow) -> Option<Duration> {
         let here = self.app_renewed.lock().unwrap_or_else(|p| p.into_inner()).get(&user_id).map(|at| at.elapsed());
-        // The time of an earlier process is that of the clock. One that lies in the future
+        // The time of another process is that of the clock. One that lies in the future
         // (the clock was set back since) tells nothing, and holds nothing up.
-        let recorded = || link.app_renewed_at.and_then(|at| u64::try_from(crate::db::now() - at).ok()).map(Duration::from_secs);
-        LOGIN_BACKOFF.checked_sub(here.or_else(recorded)?).filter(|left| !left.is_zero())
+        let recorded = link.app_renewed_at.and_then(|at| u64::try_from(crate::db::now() - at).ok()).map(Duration::from_secs);
+        renewal_pause_left(here, recorded)
     }
 
     /// Credentials mode: logs in to the application interface when the user holds no
@@ -728,6 +739,10 @@ impl Sessions {
         }
         match outcome {
             Ok(()) => {
+                // The session first, then that it was renewed: a process that reads the
+                // link between the two finds the new token. The other way round it would
+                // find a renewal and no token, which reads as a renewed session lost at once.
+                self.store_app_session(user_id);
                 if renewal {
                     self.app_renewed.lock().unwrap_or_else(|p| p.into_inner()).insert(user_id, now);
                     if let Err(e) = self.db.link_set_app_renewed(user_id, rev, Some(crate::db::now())) {
@@ -735,7 +750,6 @@ impl Sessions {
                         tracing::warn!(error = %e, "the renewal of the session of the application interface could not be recorded");
                     }
                 }
-                self.store_app_session(user_id);
             }
             Err(ClientError::InvalidCredentials) => {
                 tracing::warn!("the application interface refused the credentials: the web pages are used until the account is linked again");
@@ -1008,6 +1022,20 @@ mod tests {
         let m = Mock::new(vec![Err(ClientError::CaptchaRequired)]);
         assert_eq!(login_with_retries(&m, &creds(), Duration::ZERO).await, Err(SessionError::CaptchaRequired));
         assert_eq!(m.calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn the_latest_renewal_counts_whichever_process_made_it() {
+        let minutes = |m: u64| Some(Duration::from_secs(m * 60));
+        // A renewal this process made long ago does not hide the one another process
+        // recorded since: the pause runs from the latest of the two.
+        assert_eq!(renewal_pause_left(minutes(20), minutes(2)), minutes(13));
+        assert_eq!(renewal_pause_left(minutes(2), minutes(20)), minutes(13));
+        assert_eq!(renewal_pause_left(minutes(2), None), minutes(13));
+        assert_eq!(renewal_pause_left(None, minutes(14)), minutes(1));
+        // No renewal, or none within the pause: nothing is left of it.
+        assert_eq!(renewal_pause_left(None, None), None);
+        assert_eq!(renewal_pause_left(minutes(15), minutes(40)), None);
     }
 
     #[test]
