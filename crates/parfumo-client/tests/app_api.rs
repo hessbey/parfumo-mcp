@@ -36,6 +36,8 @@ struct Site {
     live: Mutex<String>,
     issued: AtomicU64,
     blocked: Mutex<bool>,
+    /// Whether the interface answers 429 to every call, as a site that asks to slow down.
+    busy: Mutex<bool>,
     /// Milliseconds an answer is held back, read when the request arrives: the answer is
     /// decided on arrival, as on a site that is slow to reply.
     delay_ms: AtomicU64,
@@ -57,6 +59,9 @@ fn answer(site: &Site, path: &str, auth: &str, body: &str) -> Response {
         return (StatusCode::NOT_FOUND, [(header::CONTENT_TYPE, "text/html")], BLOCK_PAGE).into_response();
     }
     let json = |status: StatusCode, text: &str| (status, [(header::CONTENT_TYPE, "application/json")], text.to_string()).into_response();
+    if path.starts_with("/app/v1/") && *site.busy.lock().unwrap() {
+        return json(StatusCode::TOO_MANY_REQUESTS, r#"{"error":"Too many requests"}"#);
+    }
     if path == "/app/v1/auth/login" {
         if let Some((status, text)) = *site.login_answer.lock().unwrap() {
             return json(StatusCode::from_u16(status).unwrap(), text);
@@ -372,6 +377,90 @@ async fn the_clients_of_one_user_hold_one_session() {
     assert!(!account.has_app_session() && !public.has_app_session(), "the refused token was taken back");
     assert_eq!(public.app_nick().await.unwrap_err(), ClientError::LoginRequired);
     assert_eq!(requests(&site), after_refusal);
+}
+
+/// A read answered by the web site after the token was refused looks, once a login has
+/// renewed the session, like a read no refusal touched. The count of refusals still tells.
+#[tokio::test]
+async fn the_refusals_of_the_token_held_are_counted_for_the_user_and_the_count_is_never_reset() {
+    let (_, site, base) = spawn().await;
+    let user = UserLimiter::new();
+    let of_user = |limiter: &Arc<UserLimiter>| {
+        ParfumoClient::with_limiter(config(&base, Duration::ZERO), GlobalLimiter::new(0), None, limiter.clone()).unwrap()
+    };
+    let (account, public, other_user) = (of_user(&user), of_user(&user), of_user(&UserLimiter::new()));
+    account.app_login(EMAIL, PASSWORD).await.unwrap();
+    assert_eq!(account.app_nick().await.unwrap(), "testuser");
+    assert_eq!(account.app_session_refusals(), 0, "nothing was refused");
+
+    // The site ends the session: the refusal one client meets is counted for the user.
+    site.live.lock().unwrap().clear();
+    assert_eq!(public.app_nick().await.unwrap_err(), ClientError::LoginRequired);
+    assert_eq!((account.app_session_refusals(), public.app_session_refusals(), other_user.app_session_refusals()), (1, 1, 0));
+    // The calls that find no token send nothing: nothing more was refused.
+    assert_eq!(account.app_nick().await.unwrap_err(), ClientError::LoginRequired);
+    assert_eq!(account.app_session_refusals(), 1);
+
+    // A login renews the session and clears what the refusal left of it; the owner may
+    // drop the session as well. The count is of what happened: neither takes it back.
+    account.app_login(EMAIL, PASSWORD).await.unwrap();
+    assert!(account.has_app_session() && !account.app_session_ended());
+    assert_eq!(account.app_session_refusals(), 1);
+    account.forget_app_session();
+    assert_eq!(account.app_session_refusals(), 1);
+
+    // The next token refused is counted in its turn.
+    account.app_login(EMAIL, PASSWORD).await.unwrap();
+    site.live.lock().unwrap().clear();
+    assert_eq!(account.app_nick().await.unwrap_err(), ClientError::LoginRequired);
+    assert_eq!(public.app_session_refusals(), 2);
+}
+
+/// A read hands a call that ends in a request to wait over to the web site, and returns
+/// what the web site answers: nothing in that answer tells that the interface asked to
+/// wait, and a 429 leaves no other trace. The count of such calls tells.
+#[tokio::test]
+async fn the_calls_to_the_interface_that_end_in_a_request_to_wait_are_counted_for_the_user() {
+    let (_, site, base) = spawn().await;
+    let process = GlobalLimiter::new(0);
+    let of_process = || ParfumoClient::new(config(&base, Duration::ZERO), process.clone(), None).unwrap();
+    // Two users of one process: the second one never logs in.
+    let (c, other) = (of_process(), of_process());
+    c.app_login(EMAIL, PASSWORD).await.unwrap();
+    assert_eq!(c.app_nick().await.unwrap(), "testuser");
+    assert_eq!(c.app_waits(), 0, "nothing asked to wait");
+    let waits = |outcome: Result<String, ClientError>| assert!(matches!(outcome, Err(ClientError::RateLimited { .. })), "{outcome:?}");
+
+    // A 429 until the retries run out: one call, counted once however often it was sent.
+    *site.busy.lock().unwrap() = true;
+    let before = requests(&site);
+    waits(c.app_nick().await);
+    assert_eq!((requests(&site) - before, c.app_waits()), (4, 1), "sent four times, counted once");
+    // The read answers what the web site says (the fake has no such page), not that the
+    // interface asked to wait: only the count tells.
+    let err = c.get_perfume("Dior/Sauvage_Eau_de_Toilette").await.unwrap_err();
+    assert_eq!(err, ClientError::NotFound("/Perfumes/Dior/Sauvage_Eau_de_Toilette".into()));
+    assert_eq!(c.app_waits(), 2);
+    // A call answered afterwards takes nothing back.
+    *site.busy.lock().unwrap() = false;
+    assert_eq!(c.app_nick().await.unwrap(), "testuser");
+    assert_eq!(c.app_waits(), 2, "nothing resets the count");
+
+    // The block page, then the calls a known block keeps from leaving, a login included.
+    *site.blocked.lock().unwrap() = true;
+    let before = requests(&site);
+    waits(c.app_nick().await);
+    waits(c.app_nick().await);
+    waits(c.app_login(EMAIL, PASSWORD).await.map(|()| String::new()));
+    assert_eq!((requests(&site) - before, c.app_waits()), (1, 5), "one call met the block page, two were not sent: all three asked to wait");
+    // During the block the read goes to the web site at once. Here the web page shows the
+    // block page too: the read itself says to wait, and that is not a call to the interface.
+    assert!(matches!(c.get_perfume("Dior/Sauvage_Eau_de_Toilette").await, Err(ClientError::RateLimited { .. })));
+    assert_eq!(c.app_waits(), 6, "the call the block kept from leaving is counted, the web page is not");
+
+    // The count is the user's: another user of the process, as blocked, made no call.
+    assert!(matches!(other.get_perfume("Dior/Sauvage_Eau_de_Toilette").await, Err(ClientError::RateLimited { .. })));
+    assert_eq!(other.app_waits(), 0);
 }
 
 #[tokio::test]

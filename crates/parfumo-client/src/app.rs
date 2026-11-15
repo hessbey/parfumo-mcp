@@ -124,6 +124,13 @@ struct State {
     /// Counts the times the owner dropped the session: a login that started before the
     /// last one does not bring a session back.
     drops: u64,
+    /// Counts the times the site refused the token held. An event counted, not a state:
+    /// `ended` is cleared by the next login, which may come before the read that met the
+    /// refusal is over, and that read must still be able to tell.
+    refusals: u64,
+    /// Counts the calls to the interface that ended in a request to wait: the block page, a
+    /// block already known, a 429 after its retries. Nothing else keeps a trace of a 429.
+    waits: u64,
 }
 
 impl AppSession {
@@ -158,7 +165,21 @@ impl AppSession {
             state.token = None;
             state.ended = true;
             state.changed = true;
+            state.refusals += 1;
         }
+    }
+
+    fn refusals(&self) -> u64 {
+        self.state().refusals
+    }
+
+    /// A call to the interface made for this user ended in a request to wait.
+    fn waited(&self) {
+        self.state().waits += 1;
+    }
+
+    fn waits(&self) -> u64 {
+        self.state().waits
     }
 
     /// Dropped by its owner (another account is linked, or none): nothing is left of it.
@@ -227,7 +248,11 @@ impl Transport {
         } else {
             (format!("{PREFIX}{path}"), Some(params), 0)
         };
-        let raw = self.send_with(method, &target, form, retries, auth).await?;
+        let raw = self.send_with(method, &target, form, retries, auth).await.inspect_err(|e| {
+            if matches!(e, ClientError::RateLimited { .. }) {
+                self.user.app.waited();
+            }
+        })?;
         Ok((raw.status, raw.body))
     }
 
@@ -270,10 +295,29 @@ impl ParfumoClient {
         self.t.user.app.ended()
     }
 
+    /// Counts the times the site refused the session token the user held, whichever client
+    /// of the user sent it. Nothing resets it: read before and after a read, it tells that
+    /// the token was refused meanwhile, even when a login has renewed the session since
+    /// (which [`Self::app_session_ended`] no longer shows).
+    pub fn app_session_refusals(&self) -> u64 {
+        self.t.user.app.refusals()
+    }
+
     /// Whether the site is known to block the address of this process: nothing is asked of
     /// the application interface until the block is over, a login included.
     pub fn app_blocked(&self) -> bool {
         self.t.blocked_secs().is_some()
+    }
+
+    /// Counts the calls to the application interface made for the user, a login included,
+    /// that ended in a request to wait (`RateLimited`): the block page was met, a block
+    /// already known kept the call from leaving, or the call was answered 429 until its
+    /// retries ran out. Nothing resets it. A read hands such a call over to the web site
+    /// and returns what the web site answers: read before and after a read, this tells
+    /// that the interface asked to wait meanwhile. A web page that asks to wait is not
+    /// counted: its error is the answer of the read.
+    pub fn app_waits(&self) -> u64 {
+        self.t.user.app.waits()
     }
 
     /// Forgets the session token without telling the site, for every client of the user.
