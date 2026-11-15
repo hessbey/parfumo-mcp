@@ -4,6 +4,7 @@
 //! which side and with which token, is read from that log.
 
 use std::{
+    pin::Pin,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -73,6 +74,10 @@ impl Asked {
 /// What a test makes happen once the stand-in has answered a call made as a member.
 type AfterMemberCall = Box<dyn FnMut(&Asked) + Send>;
 
+/// What a test makes happen, to its end, before the stand-in answers a page that completes
+/// a read of the interface: the read that asked for the page is not over until then.
+type BeforeCompletingPage = Box<dyn FnMut() -> Pin<Box<dyn Future<Output = ()> + Send>> + Send>;
+
 /// What a page that completes a read of the interface answers in place of its recorded page.
 #[derive(Clone, Copy)]
 struct PageTrouble {
@@ -108,6 +113,7 @@ struct Parfumo {
     /// What one completing page answers once a call was made as a member: the `public`
     /// area, which reads the same pages before, gets the recorded ones.
     page_trouble: Arc<Mutex<Option<PageTrouble>>>,
+    before_completing_page: Arc<Mutex<Option<BeforeCompletingPage>>>,
 }
 
 impl Parfumo {
@@ -152,6 +158,10 @@ impl Parfumo {
     fn trouble_of(&self, page: &str) -> Option<PageTrouble> {
         let trouble = self.page_trouble.lock().unwrap().filter(|trouble| trouble.page == page)?;
         self.asked.lock().unwrap().iter().any(Asked::member_call).then_some(trouble)
+    }
+
+    fn before_completing_page<F: Future<Output = ()> + Send + 'static>(&self, mut hook: impl FnMut() -> F + Send + 'static) {
+        *self.before_completing_page.lock().unwrap() = Some(Box::new(move || Box::pin(hook())));
     }
 }
 
@@ -269,6 +279,10 @@ async fn handler(State(parfumo): State<Parfumo>, method: Method, uri: Uri, heade
     let answer = if asked.member_call() {
         interface(&parfumo, asked.call().unwrap_or_default(), uri.query().unwrap_or_default(), asked.bearer.as_deref())
     } else if let Some(page) = completing_page(uri.path()) {
+        let pending = parfumo.before_completing_page.lock().unwrap().as_mut().map(|hook| hook());
+        if let Some(pending) = pending {
+            pending.await;
+        }
         match parfumo.trouble_of(uri.path()) {
             Some(trouble) => (trouble.status, Html(trouble.body)).into_response(),
             None => Html(fixture(page)).into_response(),
@@ -300,6 +314,7 @@ async fn stand_in(user_min_interval: Duration) -> (TestApp, Parfumo, User) {
         own_reads_for_the_web_panels: Arc::default(),
         after_member_call: Arc::default(),
         page_trouble: Arc::default(),
+        before_completing_page: Arc::default(),
     };
     let router = Router::new().fallback(handler).with_state(parfumo.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -611,6 +626,93 @@ async fn a_token_refused_to_a_tool_call_is_not_sent_by_the_canary() {
     // The token the account obtained is still its own after the run.
     assert!(sessions.client_for(user.id).unwrap().has_app_session());
     assert_eq!(asked.iter().filter(|a| a.call() == Some(LOGIN)).count(), 1);
+}
+
+/// The token is refused at the first call of the `perfume` check, and the client reads the
+/// web page instead. Before that read is over, a tool call of the same user logs in again:
+/// when the canary looks, the session is live, with a token nobody refused. The read was
+/// still not answered by the interface, and the reason is the refusal.
+#[tokio::test]
+async fn a_refusal_is_told_also_when_the_session_is_renewed_before_the_read_is_over() {
+    let (app, parfumo, user) = linked_stand_in().await;
+    let stale = parfumo.token_of("alice");
+    parfumo.end_app_sessions_after(&[SEARCH_CALL]);
+    // What a tool call of the user starts with. It does nothing while a token is held: the
+    // first page it logs in before is the one the client reads in place of the interface.
+    // The stand-in answers that page once the login is over, so the read ends after it.
+    let (state, id) = (app.state.clone(), user.id);
+    parfumo.before_completing_page(move || {
+        let state = state.clone();
+        async move { state.core.sessions.open_app_session(id).await }
+    });
+    let report = run(&app.state, Some(&user)).await;
+
+    let checks = area(&report, INTERFACE);
+    let expected = [
+        ("own nickname", Outcome::Ok),
+        ("search", Outcome::Ok),
+        ("perfume", Outcome::Failed),
+        ("brand", Outcome::Ok),
+        // Needs the record of the perfume.
+        ("perfumer", Outcome::Skipped),
+        ("release year", Outcome::Ok),
+        ("similar perfumes", Outcome::Ok),
+        ("own rating", Outcome::Ok),
+        ("own classification", Outcome::Ok),
+    ];
+    assert_eq!(outcomes(&checks), expected, "{}", report.text());
+    let perfume = check(&report, INTERFACE, "perfume");
+    assert!(perfume.detail.contains("refused the session token"), "{}", perfume.detail);
+    assert_eq!(interface_verdict(&report), "inconclusive", "a refusal is not a changed structure");
+
+    let asked = parfumo.asked();
+    let refused = asked.iter().position(|a| a.refused()).unwrap();
+    assert_eq!(asked[refused].bearer.as_deref(), Some(stale.as_str()));
+    assert_eq!(asked.iter().filter(|a| a.refused()).count(), 1);
+    // The login came before the answer of the web page the read went on with, and it is the
+    // only one: the canary found a token and asked for none.
+    let login = asked.iter().position(|a| a.call() == Some(LOGIN)).unwrap();
+    let page = refused + asked[refused..].iter().position(|a| a.path() == "/Perfumes/Dior/Sauvage_Eau_de_Toilette").unwrap();
+    assert!(refused < login && login < page, "refused at {refused}, login at {login}, page answered at {page}");
+    assert_eq!(asked.iter().filter(|a| a.call() == Some(LOGIN)).count(), 1);
+    // The checks that follow read with the token of that login.
+    let fresh = parfumo.token_of("alice");
+    let after: Vec<&Asked> = asked[login..].iter().filter(|a| a.member_call()).collect();
+    assert!(after.len() >= 6 && after.iter().all(|a| a.bearer.as_deref() == Some(fresh.as_str()) && a.status == 200), "{after:?}");
+}
+
+/// The account is unlinked between two calls of one read: the session token goes with the
+/// link, the calls that follow are not sent, and the web site answers in their place. The
+/// interface refused nothing and changed nothing.
+#[tokio::test]
+async fn a_read_during_which_the_account_dropped_its_session_is_not_judged() {
+    let (app, parfumo, user) = linked_stand_in().await;
+    // The `perfume` check starts with this call, and is the first to make it.
+    let (state, id) = (app.state.clone(), user.id);
+    let mut unlinked = false;
+    parfumo.after_member_call(move |asked| {
+        if asked.call() == Some("/search") && !std::mem::replace(&mut unlinked, true) {
+            assert!(state.core.sessions.unlink(id).unwrap());
+        }
+    });
+    let report = run(&app.state, Some(&user)).await;
+
+    let checks = area(&report, INTERFACE);
+    let mut expected = vec![("own nickname", Outcome::Ok), ("search", Outcome::Ok)];
+    expected.extend(NAMES[2..].iter().map(|name| (*name, Outcome::Skipped)));
+    assert_eq!(outcomes(&checks), expected, "{}", report.text());
+    let perfume = check(&report, INTERFACE, "perfume");
+    assert!(perfume.detail.contains("the account was linked again or unlinked while this read ran"), "{}", perfume.detail);
+    assert!(checks[3].detail.contains("no longer holds a session token"), "{}", checks[3].detail);
+    assert_eq!(interface_verdict(&report), "inconclusive", "{}", report.text());
+
+    let asked = parfumo.asked();
+    // The web site answered the read, and well: that is not what the check is about.
+    let dropped = asked.iter().position(|a| a.call() == Some("/search")).unwrap();
+    assert!(asked[dropped..].iter().any(|a| a.path() == "/Perfumes/Dior/Sauvage_Eau_de_Toilette" && a.status == 200), "{:?}", &asked[dropped..]);
+    // Nothing was refused, and nothing is asked of the interface after the drop.
+    assert!(!asked.iter().any(|a| a.refused()));
+    assert!(!asked[dropped + 1..].iter().any(|a| a.call().is_some()), "{:?}", &asked[dropped + 1..]);
 }
 
 /// The interface answers the record of the perfume; the web page that completes it asks

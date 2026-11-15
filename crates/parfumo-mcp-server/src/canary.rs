@@ -59,7 +59,8 @@ pub enum Outcome {
     Changed,
     /// No verdict: Parfumo was unreachable, refused, or the account session is gone.
     Failed,
-    /// Not run (an earlier check it depends on did not pass, or the run was stopped).
+    /// Not run (an earlier check it depends on did not pass, or the run was stopped), or
+    /// run and not judged: the account was linked again while the read was under way.
     Skipped,
     /// Not run because it does not apply to the canary account as it is: linked by the
     /// cookie of a browser, it holds no session token of the application interface; with a
@@ -240,7 +241,8 @@ impl Runner {
     /// The client reads the web site instead whenever the interface does not serve a read,
     /// and after the interface refused the token (which the client then forgets). Neither
     /// may pass for an answer of the interface: `expect` looks for what only the interface
-    /// fills, and a session the site ended by the time the read is over is a refusal.
+    /// fills, and what became of the session while the read ran is told by what the client
+    /// counts, read before and after it.
     ///
     /// A refusal is one failed check, and the refused token is not sent again: the account
     /// forgets it too. The next read is lent whatever the account holds then. That is a new
@@ -248,6 +250,9 @@ impl Runner {
     /// user: a token that did not live until this run then costs one check, not the area.
     /// A second refusal ends the area: two refused requests in a row are what the site was
     /// seen to answer by blocking the address.
+    ///
+    /// A session its owner dropped while the read ran (the account was linked again, or
+    /// unlinked) is not a refusal, and the read is not judged: the check is skipped.
     ///
     /// `web_panel`: the panel of the web site this read is left to for some accounts. The
     /// client carries no web session, so the panel answers it nothing: the check then does
@@ -266,8 +271,16 @@ impl Runner {
             self.skip(A, name, function, &why);
             return None;
         }
-        // Without a token the read would go to the web site under the name of the interface.
-        if !lent.lend().await {
+        let c = &lent.client;
+        let held = lent.lend().await;
+        // Events are counted, where a state would be read too late: a tool call of the same
+        // user that logs in again before this read is over leaves no trace of the refusal
+        // in the state of the session.
+        let (refusals, generation) = (c.app_session_refusals(), c.app_session_generation());
+        // The token is looked for again once the counts are read: one refused or dropped
+        // from here on is counted, and one that went between the two is not lent. Without a
+        // token the read would go to the web site under the name of the interface.
+        if !held || !c.has_app_session() {
             let why = match &self.refused_at {
                 Some(at) => format!(
                     "the application interface refused the session token at `{at}`, and the account obtained no other: nothing more is asked of it"
@@ -280,9 +293,11 @@ impl Runner {
         }
         let started = Instant::now();
         let answer = read.await;
-        // The site ended the session while this read ran. A session its owner dropped (the
-        // account was linked again meanwhile) is not a refusal.
-        let refused = lent.client.app_session_ended();
+        // The site refused the token while this read ran, whatever became of the session
+        // since. A session its owner dropped (the account was linked again meanwhile) is not
+        // a refusal.
+        let refused = c.app_session_refusals() != refusals;
+        let dropped = c.app_session_generation() != generation;
         lent.give_back();
         if refused {
             match &self.refused_at {
@@ -310,6 +325,14 @@ impl Runner {
             _ if refused => {
                 let detail = "the application interface refused the session token: it is forgotten and not sent again";
                 self.push(A, name, function, Outcome::Failed, detail.to_string(), Some(started));
+                None
+            }
+            // The calls that followed the drop were not sent: the web site answered in their
+            // place, or nothing did. Neither is the read this check is about.
+            _ if dropped => {
+                let detail = "the account was linked again or unlinked while this read ran, and its session token went with it: what came back \
+                              says nothing of the application interface";
+                self.push(A, name, function, Outcome::Skipped, detail.to_string(), Some(started));
                 None
             }
             // The token is still held: the read was left to the web site, which wants the
