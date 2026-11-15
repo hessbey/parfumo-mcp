@@ -59,6 +59,9 @@ Convention de statut dans tout le document :
 | Application mobile | `/app_v5/api/` existe (403 nginx). Non exploré : usurper l'application est interdit par le cahier des charges | Testé (403) |
 | Temps réel | WebSocket `wss://parfumo.com/worker/status` pour le fil de statuts de la page d'accueil. Non nécessaire au serveur | Vu, non testé |
 
+Depuis la version 0.3.0, l'interface `/app/v1` de l'application est lue avec le jeton de
+session du membre, sans la clé de l'application : voir [APP_API.md](APP_API.md).
+
 ### Les deux jetons
 
 | Jeton | Forme | Portée | Où le trouver | Statut |

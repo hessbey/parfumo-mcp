@@ -14,6 +14,64 @@ Synthèse à jour, en anglais : [`STATUS.md`](STATUS.md).
 > serveur HTTP puis vérifie sa taille (moins de 50 Mo), son démarrage et sa mémoire au repos
 > (`scripts/check-image.sh`). Reste non prouvé : `docker compose up` sur un VPS, derrière Caddy.
 
+## État de l'interface de l'application (version 0.3.0) : prouvé, non prouvé
+
+Relevé du 15 novembre 2026. La version 0.3.0 n'ajoute aucun outil : il y en a toujours 48.
+Quand un compte Parfumo est relié en mode identifiants (pseudo ou e-mail, et mot de passe),
+une partie des lectures de la base de données passe par l'interface JSON de l'application de
+Parfumo (`/app/v1`), avec le jeton de session de ce membre : recherche, fiche, marque,
+parfumeur, parfums d'une année de sortie, similaires et superposition, ainsi que le pseudo
+du membre, lu par les outils du compte qui en ont besoin, et ses notes et ses votes de
+classification, que lisent les outils de note et de classification. Ce que l'interface ne
+donne pas (libellé de rang, pays) est lu sur la page web. Les pages web répondent à tout le reste, et à tout sans compte, avec un compte relié
+par cookie, ou quand l'interface refuse le jeton ou ne peut pas répondre aussi complètement
+que le site. Le canari gagne une zone `interface` (9 contrôles) et le résultat
+`not_applicable`. La table `parfumo_links` gagne trois colonnes (`app_refused`, `app_ended`,
+`app_renewed_at`) ; aucun réglage nouveau. Description de l'interface et règles suivies par
+le code : [`docs/APP_API.md`](APP_API.md) (en anglais).
+
+Le tag `v0.2.3` n'a jamais été posé : `v0.3.0` est la première version publiée qui porte
+aussi le changement de la 0.2.3 (aucune page n'est conservée, chaque lecture interroge
+Parfumo).
+
+### Prouvé
+
+| Point | Preuve |
+| --- | --- |
+| Tests | `cargo test --workspace` : 343 tests, sans réseau (208 à la version 0.2.3) |
+| Lectures par l'interface | Tests de `parfumo-client` sur des réponses enregistrées sur le vrai site (`tests/fixtures/app_*.json`), servies par un faux site : recherche, fiche, marque, parfumeur, année de sortie, similaires et superposition, pseudo, notes et classification du membre. Mêmes modèles que ceux des analyseurs HTML |
+| Passage au site web | Tests : référence que la recherche de l'interface ne trouve pas, liste sans son total, objet d'erreur sous le statut 200, jeton refusé, page de blocage. La lecture est alors faite sur le site web ; un total absent n'est jamais lu comme zéro |
+| Lecture complétée | Tests : le libellé de rang et le pays viennent de la page web, lue sans le jeton, une fois par appel d'outil ; si elle ne peut pas être lue, la réponse de l'interface est renvoyée avec un avertissement (`ranking unavailable: …`, `country unavailable: …`) |
+| Session de l'interface | Tests : rien ne part vers `/app/v1` sans jeton, sauf la connexion ; un jeton refusé est oublié pour tous les clients de l'utilisateur et dans la base, et ne revient pas après un redémarrage ; une seule connexion à la fois par utilisateur ; une session renouvelée puis reperdue n'est pas redemandée avant 15 minutes, redémarrage compris ; des identifiants refusés par l'interface ne lui sont plus envoyés tant que le compte n'est pas relié à nouveau ; un lien qui change pendant une connexion ne garde aucun jeton du compte précédent |
+| Blocage de l'adresse | Tests : dès que la page de blocage est rencontrée, plus rien n'est envoyé à `/app/v1` pendant cinq minutes, pour tout le processus, et les lectures passent par les pages web |
+| Secrets | Tests : le jeton n'est jamais envoyé à une page web ni comme cookie ; il n'apparaît ni dans les journaux, ni dans le journal d'audit, ni dans les résultats d'outils, ni dans le rapport du canari ; deux utilisateurs ne portent jamais le jeton l'un de l'autre |
+| `parfumo_fetch_page` | Test : toute adresse sous `/app/` est refusée (`invalid_input`), avec ou sans compte relié, sans rien envoyer |
+| Canari, par test | Faux site : avec un compte relié en mode identifiants, les 9 contrôles de la zone `interface` sont faits avec le jeton du compte, sans ses cookies, et les trois pages web qui complètent une lecture sont lues sans jeton ; avec un compte relié par cookie, une seule ligne `not_applicable` et rien n'est envoyé à `/app/v1` ; un jeton refusé coûte un contrôle, la zone continue avec le jeton obtenu ensuite, un second refus l'arrête ; aucune écriture, aucun secret dans le rapport |
+| Migration | Test : une base de la version 0.2 reçoit les trois colonnes à l'ouverture et garde son compte |
+| **En direct**, lecture seule | 15 novembre 2026, compte de test, requêtes GET seulement : recherche, fiche, marque, parfumeur et année de sortie lus par l'interface. Mêmes parfums dans le même ordre que le site web pour une recherche par texte, une recherche par année, les pages 1 et 2 d'une marque, une page de parfumeur et la liste d'une année (`/perfumes?y_0=2015&o=n_asc` et la page `/Release_Years/2015`). Libellé de rang et pays égaux à ceux du site web après la lecture qui complète. Les douze codes de tri de la recherche sont respectés par `GET /perfumes` ; sans tri la liste est alphabétique, et l'ordre par défaut de la recherche web est `nr_desc`. Une recherche par année a répondu au-delà de son millième résultat (page 60). Les similaires, le pseudo du membre, ses notes et ses votes de classification ont été lus par l'interface et ont répondu, sans comparaison avec le site web (ses lectures sont des requêtes POST ou des panneaux du compte). Aucune requête vers le site web ne portait le jeton de session |
+
+### Non prouvé
+
+- **La zone `interface` du canari n'a jamais tourné sur le vrai site** : seulement contre le
+  faux site.
+- **Jeton refusé, blocage de l'adresse, mauvais mot de passe à la connexion de
+  l'interface** : jamais vus en direct depuis ce code. La vraie réponse de `/auth/login` à
+  un mauvais mot de passe n'a jamais été enregistrée : le code ne tient pour un refus des
+  identifiants qu'une réponse 401 en JSON, ou une réponse 2xx dont le JSON dit
+  `"status":"error"`. La page de blocage n'a jamais été enregistrée comme fixture : elle est
+  reconnue d'après ce qui en a été noté (statut 404, page HTML, « Access Denied … try again
+  in … »).
+- **Durée de vie d'un jeton de session** : inconnue.
+- **Lectures web faites par POST** : la vérification en direct ne portait que sur des GET.
+  Avis, statements, similaires, graphique de classification et filtre de marque de la
+  recherche web n'ont pas été comparés à l'interface. Les similaires et la classification
+  d'une fiche sont donc lus par l'interface sans cette comparaison.
+- **Laissés de côté exprès dans cette version** : la collection, les ports, les profils de
+  membres et toutes les écritures ne passent pas par l'interface. Ces outils fonctionnent
+  comme avant, par le site web.
+- Les points non prouvés des relevés précédents restent tels quels : cette version n'a rien
+  écrit sur Parfumo.
+
 ## État de la page de connexion locale (version 0.2) : prouvé, non prouvé
 
 Relevé du 13 novembre 2026. Le binaire local `parfumo-mcp` ne demande plus de variable

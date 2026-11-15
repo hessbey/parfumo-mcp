@@ -81,7 +81,7 @@ with the assistant, and nothing is written in the client's configuration.
 
 - **From the assistant.** The first time a tool needs the account, the assistant receives
   the address of the login page, `http://127.0.0.1:<port>/<secret>`, and passes it on. Open
-  it, enter your Parfumo nickname and password, tick the box, then ask again.
+  it, enter your Parfumo nickname or e-mail and your password, tick the box, then ask again.
 - **From a terminal.** `parfumo-mcp login` opens the same page in your browser
   (`--no-browser` only prints its address). A client that is already running the program
   finds the account at its next tool call, without a restart.
@@ -95,9 +95,27 @@ program logs in, keeps the session between runs, and logs in again by itself whe
   `reauth_required` and you paste a new one. Clicking "Logout" in that browser revokes it.
 - **Test** the link, or **unlink** the account. `parfumo-mcp logout` unlinks it too.
 
+**What each mode gives.** The tools are the same in both. In credentials mode the program
+also logs in, with the same nickname or e-mail and password, to the interface Parfumo's own
+application uses (`/app/v1`), and reads part of the database through it with your own
+session: the perfume search (by text, brand, exact year, gender), perfume, brand and
+perfumer pages, release-year listings, similar perfumes. Search results then carry each
+perfume's rating, number of ratings and of reviews; every listing read this way carries the
+perfume's numeric id; and that search goes past 1000 results. What only the web page shows (a perfume's rank, the country of a brand or of a
+perfumer) is still read there, at the cost of one more request. In cookie mode, as without
+an account, the interface is not used: every read is made on the web pages, as before
+version 0.3.0. In every mode, reviews, statements, fragrance-note pages, the other rankings,
+the community, your collection, wear log and messages, and every write, go through the web
+site. When the interface refuses the session, or cannot answer a read as completely as the
+web site, the web site answers. The rules the program follows there are in
+[Application interface](APP_API.md).
+
 If Parfumo rejects the password, the program never sends it again — even after a restart —
-until you link the account again. It never solves a captcha: if Parfumo shows one, the tool
-returns `captcha_required` and the way out is cookie mode.
+until you link the account again. The same holds for the application interface: credentials
+it refuses are not sent to it again until the account is linked again, and the tools read
+the web pages meanwhile. Only the log says so, as a warning; `parfumo_session_status` does
+not. The program never solves a captcha: if Parfumo shows one, the tool returns
+`captcha_required` and the way out is cookie mode.
 
 What the page is, and is not:
 
@@ -143,7 +161,9 @@ reason to prefer the login page, or cookie mode.
 | `PARFUMO_MCP_MASTER_KEY`, `PARFUMO_MCP_MASTER_KEY_FILE` | — (optional) | Encryption key supplied from outside, instead of the local key file |
 
 The HTTP server's variables about ports, public URL, OAuth tokens or the canary have no
-effect here.
+effect here. No variable turns the application interface on or off: it is used whenever the
+account is linked in credentials mode, from the login page or from the environment, and
+never otherwise.
 
 ## Local files
 
@@ -151,9 +171,16 @@ effect here.
   never an old copy. The file above holds the session, the audit log and the daily
   counters, and nothing is shared with a server.
 - The session and, in credentials mode, the password are encrypted with a key created on
-  first run in the neighbouring file `parfumo-mcp.db.key`. Both files are readable only by
-  their owner (mode 600). The key sits on the same disk as the database: this protection is
-  worth the file permissions, no more. Deleting both files resets everything.
+  first run in the neighbouring file `parfumo-mcp.db.key`. In credentials mode the session
+  holds, next to the cookies of the web site, the session token of the application
+  interface: it is encrypted with them and never written to the log, the audit log or a
+  tool result. Both files are readable only by their owner (mode 600). The key sits on the
+  same disk as the database: this protection is worth the file permissions, no more.
+  Deleting both files resets everything.
+- **Upgrading from 0.2.x** needs nothing: the file is upgraded in place at the first start
+  (three columns are added to the table of the linked account, `parfumo_links`) and the
+  account stays linked. An account linked in credentials mode gets its session of the
+  application interface at the next tool call, with the stored credentials.
 - To switch accounts, link another one on the login page; `parfumo-mcp logout` erases the
   stored one.
 - Standard output carries only the MCP protocol. The log (one line per tool call, no secret)

@@ -12,7 +12,8 @@ des parfums, votre collection, vos ports, vos notes et avis, et la partie commun
 (messages, forum, blogs, Souk).
 
 > **Non officiel.** Ce projet n'est ni affilié à Parfumo ni approuvé par Parfumo. Il lit les
-> mêmes pages qu'un navigateur, à une requête par seconde. L'accès automatisé peut malgré
+> mêmes pages qu'un navigateur et, pour un compte relié avec son mot de passe, l'interface
+> de l'application de Parfumo, à une requête par seconde. L'accès automatisé peut malgré
 > tout conduire Parfumo à suspendre le compte relié : vous l'utilisez à vos risques.
 
 ## Ce que vous obtenez
@@ -33,6 +34,14 @@ des parfums, votre collection, vos ports, vos notes et avis, et la partie commun
   montre ce qui a réellement été écrit sur votre compte.
 - **Toujours à jour.** Chaque lecture interroge Parfumo : aucune page n'est conservée pour
   être resservie plus tard.
+- **Des réponses plus riches avec un compte relié par mot de passe.** Quand votre compte
+  Parfumo est relié avec son pseudo ou son e-mail et son mot de passe, une partie des
+  lectures de la base de données (recherche, parfum, marque, parfumeur, année de sortie,
+  parfums similaires) passe par l'interface qu'utilise l'application de Parfumo. Les
+  résultats de recherche donnent alors la note et le nombre de notes de chaque parfum, et
+  une recherche par nom, par marque ou par année n'est plus limitée à 1000 résultats. Rien
+  d'autre ne change : avec un compte relié par un cookie de navigateur, ou sans compte, tout
+  continue de fonctionner par les pages web.
 - **Prudent avec le site.** Une requête par seconde par utilisateur, délai aléatoire,
   `User-Agent` fixe et honnête. Aucune résolution de captcha, aucun contournement de
   Cloudflare.
@@ -114,7 +123,8 @@ Les guides sont en anglais ; les références détaillées sont en français.
 
 ```
 crates/parfumo-client      bibliothèque : accès au site. Transport, routes et sélecteurs
-                           (un seul module, src/site.rs), analyse HTML, modèles
+                           (un seul module, src/site.rs), analyse HTML, interface de
+                           l'application de Parfumo (src/app*.rs), modèles
 crates/parfumo-mcp-core    bibliothèque : les 48 outils, la session Parfumo, le stockage,
                            le journal d'audit
 crates/parfumo-mcp         binaire local : les outils sur stdio
@@ -127,6 +137,12 @@ Parfumo est un site rendu côté serveur, sans API publique : le client analyse 
 Toutes les routes et tous les sélecteurs sont dans un seul module, les analyseurs sont
 testés sur des fixtures enregistrées, et un test canari quotidien en lecture seule, sur le
 serveur hébergé, signale toute page dont la structure a changé.
+Depuis la version 0.3.0, une partie des lectures de la base de données d'un compte relié
+avec son mot de passe emprunte l'interface JSON de l'application de Parfumo, avec la
+session de ce membre et rien d'autre ; les pages web répondent à tout le reste, et à tout
+quand cette interface ne le peut pas. Elle est décrite dans
+[Interface de l'application](docs/APP_API.md) (en anglais) ; le canari la contrôle quand
+son compte de test est relié de cette façon.
 
 ## Développement
 

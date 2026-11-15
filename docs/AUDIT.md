@@ -47,6 +47,35 @@ journaux relus.
 | Test canari quotidien sur un compte de test | Tenu | `canary.rs` ; 48 contrôles `ok` sur le vrai site le 12 novembre 2026 |
 | `User-Agent` fixe et honnête | Tenu | `transport.rs` |
 
+## 2 quater. Changement postérieur à l'audit : l'interface de l'application (version 0.3.0)
+
+Depuis la version 0.3.0, quand un compte Parfumo est relié avec son identifiant (pseudo ou
+e-mail) et son mot de passe, une partie des lectures de la base de données passe par
+l'interface JSON de l'application de Parfumo (`/app/v1`, décrite dans
+[APP_API.md](APP_API.md), en anglais), avec le jeton de session de ce membre. Un compte relié
+par cookie, ou l'absence de compte, n'y envoie rien : les pages web répondent, comme avant.
+Le programme détient donc un secret de plus par utilisateur, et envoie le mot de passe à une
+seconde adresse de connexion du même site. Ce changement a été relu en interne avant sa
+publication, et les défauts trouvés ont été corrigés ; il n'a pas fait l'objet d'un nouvel
+audit complet, ni d'une relecture par un tiers. Ce que ce changement oblige à tenir, dans la
+forme de la section 2 :
+
+| Exigence | État | Preuve |
+| --- | --- | --- |
+| Jeton stocké chiffré, par utilisateur | Tenu | Le jeton est rangé avec les cookies de session, dans le même bloc AES-256-GCM lié à l'utilisateur (colonne `cookies` de `parfumo_links`). Délier le compte, ou en relier un autre, l'efface de la base et de la mémoire. `a_linked_account_gets_keeps_and_renews_its_session_of_the_application_interface`, `unlinking_or_linking_another_account_takes_the_token_away_from_every_client` |
+| Jeton jamais dans les journaux, le journal d'audit, les résultats d'outils, les erreurs, le rapport du canari | Tenu | Journaux, journal d'audit et résultats d'outils : `two_linked_users_never_carry_each_other_s_session_token`, `a_database_tool_reads_through_the_session_of_the_linked_account_and_the_web_site_otherwise`. Rapport du canari : `the_interface_area_reads_the_application_interface_with_the_token_of_the_canary_account`. Le jeton n'a pas de forme affichable (`AppSession`, `app.rs`) et la bibliothèque cliente n'écrit aucun journal |
+| Aucune requête vers `/app/v1` sans jeton, sauf la connexion | Tenu | Refusée dans le transport avant tout envoi (`check_route` et `clearance`, `transport.rs`), par où sortent toutes les requêtes des deux binaires ; `parfumo_fetch_page` refuse toute adresse sous `/app/`. L'outil de développement `explore`, absent des binaires publiés, a sa propre sortie et applique la même règle. `nothing_goes_to_the_application_interface_without_the_token_except_the_login`, `without_a_token_nothing_is_sent_and_a_refused_token_is_never_sent_again`, `the_page_reader_sends_nothing_to_the_application_interface` |
+| Un jeton refusé (401) n'est jamais renvoyé | Tenu | Oublié aussitôt pour tous les clients de l'utilisateur, et dans la base à la fin de l'appel d'outil (même abandonné en cours) : il ne revient pas après un redémarrage ; un appel qui attendait derrière le refus ne le renvoie pas. `calls_made_together_send_a_refused_token_once_and_log_in_once`, `a_call_that_starts_while_another_falls_back_does_not_bring_the_refused_token_back`, `a_token_the_site_refused_does_not_come_back_from_the_database` |
+| Des identifiants refusés par l'interface ne lui sont pas renvoyés | Tenu | Colonne `app_refused` du lien, remise à zéro quand le compte est relié. Toute autre panne de la connexion est suivie d'une pause de 15 minutes. Une session renouvelée puis reperdue dans les 15 minutes n'est pas redemandée avant la fin de ce délai, redémarrage compris (colonnes `app_ended` et `app_renewed_at`). `credentials_the_interface_refused_are_never_sent_to_it_again_until_the_account_is_linked_again`, `an_outage_of_the_login_to_the_interface_is_followed_by_a_pause_not_taken_for_a_refusal`, `a_restart_does_not_forget_that_a_renewed_session_was_lost` |
+| Le jeton n'est jamais envoyé à une page web, ni comme cookie | Tenu | Le transport refuse un appel fait au nom du membre hors de `/app/v1`, et le jeton n'entre pas dans les cookies envoyés. `nothing_goes_to_the_application_interface_without_the_token_except_the_login`, `login_keeps_a_token_that_is_sent_as_a_bearer_and_never_as_a_cookie`, `the_three_web_panels_are_read_on_the_web_site_by_a_client_without_token`. Sur le vrai site, en lecture seule, le 15 novembre 2026 : aucune requête vers les pages web ne portait le jeton |
+| La clé propre à l'application n'est jamais utilisée | Tenu | Elle ne figure pas dans le code : la seule authentification posée sur une requête vers `/app/v1` est le jeton de session du membre (`send_once`, `transport.rs`). Aucun en-tête propre à l'application n'est envoyé ; le `User-Agent` reste celui de `parfumo-mcp` |
+| Un jeton n'appartient qu'à un utilisateur et qu'à un compte | Tenu | Un seul détenteur par utilisateur, partagé par ses clients et par aucun autre ; un lien qui change pendant une connexion ne garde aucun jeton du compte précédent. `two_linked_users_never_carry_each_other_s_session_token`, `the_clients_of_one_user_hold_one_session`, `a_login_under_way_when_another_account_is_linked_leaves_nothing_in_the_new_link`, `a_link_that_changes_at_the_instant_a_login_leaves_keeps_nothing_of_the_previous_account` |
+| Arrêt quand le site bloque l'adresse | Tenu | Dès que la page de blocage est rencontrée, plus rien n'est envoyé à `/app/v1` pendant cinq minutes, pour tous les utilisateurs du processus, et les lectures passent par les pages web. `the_block_page_stops_every_call_to_the_interface_for_five_minutes`, `while_the_address_is_blocked_every_read_goes_to_the_web_site_and_nothing_to_the_interface` |
+| Débit : 1 requête par seconde par utilisateur, pages web et interface confondues | Tenu | Le client public et le client du compte d'un utilisateur partagent le même créneau de requête (`UserLimiter`, `transport.rs`) |
+
+Les tests cités tournent sans réseau, contre un faux site. Ce qui n'a pas été mesuré sur le
+vrai site est dans la section 3.
+
 ## 2 ter. Changement postérieur à l'audit : la page de connexion du binaire local
 
 Depuis la version 0.2, le binaire local `parfumo-mcp` ouvre une page de connexion sur
@@ -111,3 +140,18 @@ Ce changement n'a pas fait l'objet d'un nouvel audit complet.
 - La relecture n'a pas couvert en entier les fichiers d'outils (`*_tools.rs`) : l'absence
   d'appel aux routes de suppression de compte, de mot de passe et d'e-mail repose sur une
   recherche de ces noms dans le code.
+- **Interface de l'application : la réponse à un mauvais mot de passe n'a jamais été
+  enregistrée.** Le code ne tient pour un refus des identifiants qu'une réponse 401 en JSON,
+  ou une réponse 2xx dont le JSON dit `"status":"error"`. Toute autre réponse de
+  `/app/v1/auth/login` (400, 403, 404, 422, panne) est suivie d'une pause de 15 minutes, puis
+  d'un nouvel essai au prochain appel d'outil. Si le site répond autrement à un mauvais mot
+  de passe, les mêmes identifiants lui seraient renvoyés, au plus une fois par quart d'heure
+  et par processus : cette pause est en mémoire, un redémarrage la remet à zéro.
+- **Interface de l'application : la durée de vie d'un jeton de session est inconnue.** Le
+  jeton reste stocké, chiffré, tant que le site ne l'a pas refusé et que le compte n'est pas
+  délié. Délier le compte l'efface de la base et de la mémoire sans fermer la session auprès
+  de Parfumo : le jeton y reste valable jusqu'à une échéance qu'on ne connaît pas.
+- **Interface de l'application : la page de blocage de l'adresse n'a jamais été enregistrée
+  comme fixture.** Elle est reconnue d'après ce qui en a été noté (statut 404, page HTML,
+  « Access Denied … try again in … »). Une page de blocage d'une autre forme ne serait pas
+  reconnue, et l'interface continuerait d'être interrogée.
