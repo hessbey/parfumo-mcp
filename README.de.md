@@ -36,9 +36,11 @@ auf die Community (Nachrichten, Forum, Blogs, Souk).
   Tag begrenzt.
 - **Nachvollziehbar.** Jeder Tool-Aufruf wird lokal protokolliert; `parfumo-mcp audit --writes`
   zeigt, was tatsächlich in dein Konto geschrieben wurde.
-- **Rücksichtsvoll gegenüber der Website.** Eine Anfrage pro Sekunde und Nutzer, zufällige
-  Verzögerung, ein fester und ehrlicher `User-Agent`, 24 Stunden Cache für Seiten und eine
-  Stunde für Suchen und Ranglisten. Kein Lösen von Captchas, kein Umgehen von Cloudflare.
+- **Immer aktuell.** Jede Abfrage geht an Parfumo: Keine Seite wird aufbewahrt, um später
+  erneut ausgeliefert zu werden.
+- **Vorsichtig gegenüber der Website.** Eine Anfrage pro Sekunde und Nutzer, zufällige
+  Verzögerung, ein fester und ehrlicher `User-Agent`. Kein Lösen von Captchas, kein Umgehen
+  von Cloudflare.
 - **Arbeitet mit `www.parfumo.com`, der englischen Website.** Die deutsche Website
   `www.parfumo.de` verwendet andere Adressen und Beschriftungen und wird nicht unterstützt.
 - **Zugangsdaten bleiben außerhalb des Gesprächs.** Du gibst sie auf einer Anmeldeseite ein –

@@ -18,7 +18,7 @@ outils dépendent, et vérifie que les analyseurs y trouvent ce qu'ils attendent
 | Heure | `PARFUMO_MCP_CANARY_HOUR`, heure UTC de 0 à 23. Défaut : 4. `off` coupe le canari |
 | Pages publiques | 27 contrôles : recherche, fiche, avis, statements, similaires, marque, parfumeur, note, classements, page libre, forum, communautés, blogs, Souk, profil, mur, avis et liste d'un membre |
 | Compte de test | 21 contrôles de plus si `PARFUMO_MCP_CANARY_USER` nomme un utilisateur du serveur dont le compte Parfumo est relié : listes, export CSV, ports, notes, avis, classification, messagerie, notifications, abonnements, réglages, profil |
-| Écritures | Aucune. Le canari ne fait que lire, et n'utilise pas le cache |
+| Écritures | Aucune. Le canari ne fait que lire |
 | Débit | Celui des outils : une requête par seconde. Une soixantaine de requêtes ; 68 secondes mesurées le 12 novembre 2026 |
 | Arrêt | Immédiat sur un captcha ou une limitation de débit : le reste est noté `skipped` |
 | Alerte | `PARFUMO_MCP_CANARY_WEBHOOK` : une requête POST en JSON quand le résultat n'est pas `ok`, et une autre quand il redevient `ok`. Le corps porte la même phrase sous `text` et `content` (formats de Slack et de Discord) et la liste des contrôles en cause |
@@ -176,7 +176,7 @@ curl https://<votre-domaine>/healthz
 ```
 
 Le serveur utilise l'image publiée `ghcr.io/hessbey/parfumo-mcp-server`. Sans réglage, c'est
-la dernière version ; `PARFUMO_MCP_VERSION=0.2.2` dans `.env` en fige une, et la mise à jour
+la dernière version ; `PARFUMO_MCP_VERSION=0.2.3` dans `.env` en fige une, et la mise à jour
 consiste alors à changer ce numéro avant les commandes ci-dessus. Pour une image construite
 soi-même, voir [HOSTING.md](HOSTING.md#install).
 
@@ -199,7 +199,7 @@ autorisation : le client légitime doit alors se reconnecter. C'est voulu.
 sort pas du réseau Docker.
 
 **Surveillance.** `GET /healthz` répond 200 tant que la base répond, et donne le dernier
-verdict du canari : `{"canary":{"at":…,"status":"ok"},"status":"ok","version":"0.2.2"}`. Le
+verdict du canari : `{"canary":{"at":…,"status":"ok"},"status":"ok","version":"0.2.3"}`. Le
 verdict du canari ne fait jamais échouer le contrôle de santé : un conteneur ne doit pas
 redémarrer parce que Parfumo a changé une page.
 
@@ -214,8 +214,8 @@ Une version se publie en poussant un tag. Le reste est automatique
 2. Poser le tag du même numéro, précédé de `v`, et le pousser :
 
    ```sh
-   git tag v0.2.2
-   git push origin v0.2.2
+   git tag v0.2.3
+   git push origin v0.2.3
    ```
 
    Le tag doit correspondre exactement à la version de `Cargo.toml`, sinon la publication
@@ -231,7 +231,7 @@ Une version se publie en poussant un tag. Le reste est automatique
      (`@hessbey/parfumo-mcp-linux-x64`, `-linux-arm64`, `-darwin-arm64`, `-darwin-x64`,
      `-win32-x64`).
 
-Un tag de pré-version (`v0.2.2-rc.1`) crée une pré-version et ne déplace pas `latest` ; sur
+Un tag de pré-version (`v0.2.3-rc.1`) crée une pré-version et ne déplace pas `latest` ; sur
 npm, il est publié sous l'étiquette `next`.
 
 **npm.** La publication sur npm vient en dernier, après la page de version : si elle échoue,

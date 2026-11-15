@@ -585,7 +585,7 @@ impl ParfumoTools {
             let mut write = write;
             if write.executed {
                 write.result_url = Some(format!("{}{}/Wall", c.account.base_url(), routes::user(&nick)));
-                // Read back on the session's own client: the public one may hold a cached page.
+                // Read back on the session's own client, which sees the wall as its owner does.
                 let same = |a: &str, b: &str| a.split_whitespace().eq(b.split_whitespace());
                 let found = c
                     .account

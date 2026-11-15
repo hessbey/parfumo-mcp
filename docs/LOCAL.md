@@ -136,7 +136,7 @@ reason to prefer the login page, or cookie mode.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `PARFUMO_MCP_DB` | `$XDG_DATA_HOME/parfumo-mcp/parfumo-mcp.db`, else `~/.local/share/parfumo-mcp/parfumo-mcp.db` (`%LOCALAPPDATA%` on Windows) | Local SQLite file: cache of public pages, Parfumo session, audit log, daily counters |
+| `PARFUMO_MCP_DB` | `$XDG_DATA_HOME/parfumo-mcp/parfumo-mcp.db`, else `~/.local/share/parfumo-mcp/parfumo-mcp.db` (`%LOCALAPPDATA%` on Windows) | Local SQLite file: Parfumo session, audit log, daily counters |
 | `PARFUMO_MCP_PUBLIC_WRITES` | `false` | `true` allows writes that other members can see to be really sent. Otherwise those tools answer as in `dry_run` |
 | `PARFUMO_MCP_PUBLIC_WRITE_CAPS`, `PARFUMO_MCP_WRITE_RECIPIENTS` | as the HTTP server | Daily caps and allowed recipients: see [Configuration](CONFIGURATION.md#public-writes) |
 | `PARFUMO_BASE_URL`, `PARFUMO_MCP_USER_MIN_INTERVAL_MS`, `PARFUMO_MCP_USER_JITTER_MS`, `PARFUMO_MCP_GLOBAL_RPS` | as the HTTP server | Parfumo domain and request rate (never more than one request per second) |
@@ -147,7 +147,9 @@ effect here.
 
 ## Local files
 
-- **The cache stays local**, in the file above. Nothing is shared with a server.
+- **Nothing read from Parfumo is kept.** Every read asks the site again, so an answer is
+  never an old copy. The file above holds the session, the audit log and the daily
+  counters, and nothing is shared with a server.
 - The session and, in credentials mode, the password are encrypted with a key created on
   first run in the neighbouring file `parfumo-mcp.db.key`. Both files are readable only by
   their owner (mode 600). The key sits on the same disk as the database: this protection is
