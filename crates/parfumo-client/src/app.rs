@@ -65,6 +65,22 @@ fn error_text(json: &Value) -> Option<String> {
     ["message", "error"].iter().find_map(|k| json.get(k).and_then(Value::as_str)).map(str::to_string)
 }
 
+/// As many characters of a text of the interface as are passed on.
+pub(crate) const MAX_PASSED_ON: usize = 200;
+
+/// A text the interface sent, as it may enter an error message or a warning: on one line
+/// and of a bounded length, since it ends in the answer of a tool. Nothing is left of a
+/// text that repeats the session token held (`token`), which must never be there. The
+/// token is looked for in the whole text, before it is cut: cut first, a token that stands
+/// across the cut would leave its first characters behind.
+pub(crate) fn passed_on(text: &str, token: Option<&str>) -> String {
+    let line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if token.is_some_and(|token| !token.is_empty() && line.contains(token)) {
+        return String::new();
+    }
+    line.chars().take(MAX_PASSED_ON).collect()
+}
+
 /// Whether an error of the application interface hands the read over to the web site: the
 /// session was refused (its token is then already forgotten), or the interface asks to
 /// wait (the address is blocked, or it is rate limited). A read made of several calls
@@ -231,7 +247,11 @@ impl Transport {
         match status {
             200..=299 => Ok(json),
             404 | 410 => Err(ClientError::NotFound(path.to_string())),
-            400 | 422 => Err(ClientError::InvalidInput(error_text(&json).unwrap_or_else(|| format!("refused by {PREFIX}{path}")))),
+            400 | 422 => {
+                // The token held is the one this call sent: a refusal of the request does not drop it.
+                let words = error_text(&json).map(|text| passed_on(&text, self.user.app.token().as_deref())).filter(|words| !words.is_empty());
+                Err(ClientError::InvalidInput(words.unwrap_or_else(|| format!("refused by {PREFIX}{path}"))))
+            }
             _ => Err(ClientError::Upstream(format!("HTTP {status} on {PREFIX}{path}"))),
         }
     }
@@ -342,7 +362,23 @@ impl ParfumoClient {
 
 #[cfg(test)]
 mod tests {
-    use super::is_block_page;
+    use super::{MAX_PASSED_ON, is_block_page, passed_on};
+
+    #[test]
+    fn a_text_of_the_interface_is_passed_on_on_one_line_bounded_and_never_with_the_token() {
+        assert_eq!(passed_on("  Invalid\n type\t given ", Some("tok-1")), "Invalid type given");
+        let long = passed_on(&format!("Too\n busy {}", "x".repeat(1_000)), None);
+        assert!(long.starts_with("Too busy x") && long.chars().count() == MAX_PASSED_ON, "{long}");
+        // Nothing is left of a text that repeats the token, wherever in it: before the
+        // cut, across it (where a cut made first would keep the start of the token), after it.
+        for before in [0, MAX_PASSED_ON - 3, MAX_PASSED_ON + 50] {
+            let text = format!("{} tok-1 is busy", "x".repeat(before));
+            assert_eq!(passed_on(&text, Some("tok-1")), "", "{before} characters before the token");
+            assert!(!passed_on(&text, Some("another")).is_empty() && !passed_on(&text, None).is_empty());
+        }
+        // An empty token is no token: every text contains the empty text.
+        assert_eq!(passed_on("Invalid type", Some("")), "Invalid type");
+    }
 
     #[test]
     fn the_block_page_is_what_was_recorded_of_it_and_no_other_page() {
