@@ -25,6 +25,13 @@ pub const LOGIN_BACKOFF: Duration = Duration::from_secs(15 * 60);
 /// Link statuses that mean "Parfumo refused this link": only /link clears them.
 pub const STATUS_REAUTH: &str = "reauth_required";
 pub const STATUS_EXPIRED: &str = "expired";
+/// Link statuses left by a login to the web site that met a captcha or an outage: the
+/// next account tool tries again once the pause is over.
+pub const STATUS_CAPTCHA: &str = "captcha_required";
+pub const STATUS_LOGIN_FAILED: &str = "login_failed";
+/// The link works, as far as the last login to the web site told (or, on the stdio
+/// server, no login was needed yet).
+pub const STATUS_LINKED: &str = "linked";
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct Credentials {
@@ -56,16 +63,11 @@ pub trait ParfumoAuth: Sync {
 }
 
 impl ParfumoAuth for ParfumoClient {
-    /// The web site first; then the application interface, with the same credentials. The
-    /// account is linked as soon as the web site accepts them: without a session of the
-    /// application interface, the tools read the web pages instead.
+    /// The web site only: the account is linked as soon as the web site accepts the
+    /// credentials. The application interface has a login of its own, with its own rules
+    /// (`Sessions::ensure_app_session`), which a new attempt on the web site must not repeat.
     async fn login(&self, username: &str, password: &str) -> Result<(), ClientError> {
-        ParfumoClient::login(self, username, password).await?;
-        if let Err(e) = self.app_login(username, password).await {
-            // `ClientError` never carries a secret (tested in parfumo-client).
-            tracing::warn!(error = %e, "no session of the application interface: the web pages are used instead");
-        }
-        Ok(())
+        ParfumoClient::login(self, username, password).await
     }
 }
 
@@ -113,7 +115,9 @@ pub struct Sessions {
     global: Arc<GlobalLimiter>,
     clients: Mutex<HashMap<i64, ParfumoClient>>,
     public_clients: Mutex<HashMap<i64, ParfumoClient>>,
-    /// One request slot per user, shared by that user's public and account clients.
+    /// What the public client and the account client of a user share: one request slot,
+    /// and the one place where the session token of the application interface of that
+    /// user is held. No other user's client is ever given it.
     limiters: Mutex<HashMap<i64, Arc<UserLimiter>>>,
     verified: Mutex<HashMap<i64, std::time::Instant>>,
     /// One re-login at a time per user; a slow or dead session of one user never makes
@@ -122,12 +126,23 @@ pub struct Sessions {
     /// Users whose last probe or re-login met a captcha or an outage: no new attempt
     /// before the instant given, so that a refusal is never hammered.
     backoff: Mutex<HashMap<i64, (std::time::Instant, SessionError)>>,
-    /// Users whose login to the application interface failed: not tried again before the
-    /// instant given. A refused login is never repeated call after call.
+    /// One login to the application interface at a time per user: calls made together
+    /// wait for the first one and use what it obtained, or learn what it met.
+    app_login: Mutex<HashMap<i64, Arc<tokio::sync::Mutex<()>>>>,
+    /// Users for whom no login to the application interface is made before the instant
+    /// given: the last one failed, or the session it obtained was lost at once.
     app_backoff: Mutex<HashMap<i64, std::time::Instant>>,
+    /// When the session of the application interface of a user was last renewed, that is
+    /// obtained again after the site had ended it. One renewal is allowed; a session lost
+    /// again within [`LOGIN_BACKOFF`] of it is not asked for until that time is over.
+    app_renewed: Mutex<HashMap<i64, std::time::Instant>>,
     /// The `rev` of the link each in-memory session belongs to. Another process may link
     /// a different account (`parfumo-mcp login` next to a running stdio server): the
     /// session kept here is then dropped instead of acting for the previous account.
+    ///
+    /// Its lock is also the one under which a link is read or replaced together with what
+    /// is kept in memory for it: the client of an account and the `rev` it belongs to
+    /// always change as one. It is taken before any other lock of this struct.
     link_revs: Mutex<HashMap<i64, String>>,
 }
 
@@ -149,30 +164,58 @@ impl Sessions {
             verified: Mutex::new(HashMap::new()),
             relogin: Mutex::new(HashMap::new()),
             backoff: Mutex::new(HashMap::new()),
+            app_login: Mutex::new(HashMap::new()),
             app_backoff: Mutex::new(HashMap::new()),
+            app_renewed: Mutex::new(HashMap::new()),
             link_revs: Mutex::new(HashMap::new()),
         }
     }
 
-    /// Drops what is kept in memory for `user_id` when it belongs to another link than the
-    /// one now stored (`rev`), or to a link that is gone (`None`).
-    fn follow_link(&self, user_id: i64, rev: Option<&str>) {
-        let mut revs = self.link_revs.lock().unwrap_or_else(|p| p.into_inner());
-        if revs.get(&user_id).map(String::as_str) == rev {
-            return;
-        }
-        match rev {
-            Some(rev) => revs.insert(user_id, rev.to_string()),
-            None => revs.remove(&user_id),
-        };
-        drop(revs);
+    fn revs(&self) -> std::sync::MutexGuard<'_, HashMap<i64, String>> {
+        self.link_revs.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// What the clients of `user_id` share.
+    fn limiter(&self, user_id: i64) -> Arc<UserLimiter> {
+        self.limiters.lock().unwrap_or_else(|p| p.into_inner()).entry(user_id).or_default().clone()
+    }
+
+    /// Drops everything kept in memory for the link of `user_id`: the client of the
+    /// account, what is known of its web session, the pauses, and the session of the
+    /// application interface, whose token belongs to the account of that link. Called with
+    /// the lock of `link_revs` held, when the link changes or goes.
+    fn drop_link_state(&self, user_id: i64) {
         self.clients.lock().unwrap_or_else(|p| p.into_inner()).remove(&user_id);
         self.forget_verified(user_id);
         self.backoff.lock().unwrap_or_else(|p| p.into_inner()).remove(&user_id);
+        self.app_backoff.lock().unwrap_or_else(|p| p.into_inner()).remove(&user_id);
+        self.app_renewed.lock().unwrap_or_else(|p| p.into_inner()).remove(&user_id);
+        self.limiter(user_id).forget_app_session();
     }
 
-    fn new_client(&self, user_id: i64) -> Result<ParfumoClient, SessionError> {
-        let limiter = self.limiters.lock().unwrap_or_else(|p| p.into_inner()).entry(user_id).or_default().clone();
+    /// Reads the link of `user_id` and drops what is kept in memory when it belongs to
+    /// another link than the one now stored, or to a link that is gone. Read and compared
+    /// as one step, so that a link made meanwhile is not taken for an older one.
+    fn follow(&self, user_id: i64) -> Result<Option<crate::db::LinkRow>, SessionError> {
+        let mut revs = self.revs();
+        let link = self.db.link_get(user_id).map_err(internal)?;
+        let rev = link.as_ref().map(|l| l.rev.as_str());
+        if revs.get(&user_id).map(String::as_str) != rev {
+            match rev {
+                Some(rev) => revs.insert(user_id, rev.to_string()),
+                None => revs.remove(&user_id),
+            };
+            self.drop_link_state(user_id);
+        }
+        Ok(link)
+    }
+
+    /// Whether the link `rev` is still the one this process keeps a session for.
+    fn follows(&self, user_id: i64, rev: &str) -> bool {
+        self.revs().get(&user_id).is_some_and(|current| current == rev)
+    }
+
+    fn client_on(&self, limiter: Arc<UserLimiter>) -> Result<ParfumoClient, SessionError> {
         let cfg = ClientConfig {
             base_url: self.cfg.parfumo_base_url.clone(),
             min_interval: self.cfg.user_min_interval,
@@ -183,8 +226,14 @@ impl Sessions {
         ParfumoClient::with_limiter(cfg, self.global.clone(), None, limiter).map_err(|e| SessionError::Internal(e.to_string()))
     }
 
+    fn new_client(&self, user_id: i64) -> Result<ParfumoClient, SessionError> {
+        self.client_on(self.limiter(user_id))
+    }
+
     /// Anonymous client of one user, for the public database tools. It never carries the
-    /// user's Parfumo cookies: public pages are fetched without the account.
+    /// user's Parfumo cookies: public pages are fetched without the account. It reads the
+    /// application interface with the session token of the user's linked account, which it
+    /// shares with the account client; the token is not a cookie and goes nowhere else.
     pub fn public_client_for(&self, user_id: i64) -> Result<ParfumoClient, SessionError> {
         let mut map = self.public_clients.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(c) = map.get(&user_id) {
@@ -195,24 +244,27 @@ impl Sessions {
         Ok(client)
     }
 
-    /// The account client of one user (its own cookie jar and rate limiter, never shared).
+    /// The account client of one user (its own cookie jar, never shared), with the session
+    /// stored for the link this process follows.
     pub fn client_for(&self, user_id: i64) -> Result<ParfumoClient, SessionError> {
         if let Some(c) = self.clients.lock().unwrap_or_else(|p| p.into_inner()).get(&user_id) {
             return Ok(c.clone());
         }
+        // Under the lock of the links: the stored session is read, and the client kept, for
+        // one and the same link.
+        let revs = self.revs();
+        if let Some(c) = self.clients.lock().unwrap_or_else(|p| p.into_inner()).get(&user_id) {
+            return Ok(c.clone());
+        }
         let client = self.new_client(user_id)?;
-        if let Some(cookies) = self.stored_cookies(user_id)? {
+        let link = self.db.link_get(user_id).map_err(internal)?.filter(|link| revs.get(&user_id) == Some(&link.rev));
+        if let Some(blob) = link.and_then(|link| link.cookies) {
+            let plain = self.key.decrypt(&blob, &aad(user_id, "cookies")).map_err(internal)?;
+            let cookies: Vec<StoredCookie> = serde_json::from_slice(&plain).map_err(internal)?;
             client.import_cookies(&cookies);
         }
-        let mut map = self.clients.lock().unwrap_or_else(|p| p.into_inner());
-        Ok(map.entry(user_id).or_insert(client).clone())
-    }
-
-    fn stored_cookies(&self, user_id: i64) -> Result<Option<Vec<StoredCookie>>, SessionError> {
-        let Some(link) = self.db.link_get(user_id).map_err(internal)? else { return Ok(None) };
-        let Some(blob) = link.cookies else { return Ok(None) };
-        let plain = self.key.decrypt(&blob, &aad(user_id, "cookies")).map_err(internal)?;
-        Ok(Some(serde_json::from_slice(&plain).map_err(internal)?))
+        self.clients.lock().unwrap_or_else(|p| p.into_inner()).insert(user_id, client.clone());
+        Ok(client)
     }
 
     fn encrypt_cookies(&self, user_id: i64, client: &ParfumoClient) -> Result<Vec<u8>, SessionError> {
@@ -227,9 +279,7 @@ impl Sessions {
     /// Logged-in client for an account tool. `not_linked` without a link; otherwise the
     /// session is probed (and renewed if needed) unless it was checked recently.
     pub async fn account_client(&self, user_id: i64) -> Result<ParfumoClient, SessionError> {
-        let link = self.db.link_get(user_id).map_err(internal)?;
-        self.follow_link(user_id, link.as_ref().map(|l| l.rev.as_str()));
-        if link.is_none() {
+        if self.follow(user_id)?.is_none() {
             return Err(SessionError::NotLinked);
         }
         let fresh = self.verified.lock().unwrap_or_else(|p| p.into_inner()).get(&user_id).is_some_and(|t| t.elapsed() < SESSION_TRUST);
@@ -270,16 +320,38 @@ impl Sessions {
     }
 
     /// A client of its own, without account cookies, for the canary: it reads the public
-    /// site through the rate limiter slot of `user_id`.
+    /// site through the rate limiter slot of `user_id`, and the web pages only, whatever
+    /// session of the application interface that user holds (the canary checks the HTML).
     pub fn uncached_public_client(&self, user_id: i64) -> Result<ParfumoClient, SessionError> {
-        self.new_client(user_id)
+        self.client_on(self.limiter(user_id).web_only())
     }
 
-    fn replace_client(&self, user_id: i64, client: ParfumoClient, rev: String) {
-        self.link_revs.lock().unwrap_or_else(|p| p.into_inner()).insert(user_id, rev);
-        self.forget_verified(user_id);
-        self.backoff.lock().unwrap_or_else(|p| p.into_inner()).remove(&user_id);
-        self.clients.lock().unwrap_or_else(|p| p.into_inner()).insert(user_id, client);
+    /// Stores a new link of `user_id` and makes it the one this process follows, as one
+    /// step. What was kept in memory for the previous link is dropped first: the cookies
+    /// stored with the new link cannot carry the session token of the previous account,
+    /// and nothing obtained for that account is written into the new row afterwards.
+    /// `client`, when given, holds the web session of the new link and is kept for it.
+    fn store_link(
+        &self,
+        user_id: i64,
+        mode: &str,
+        secret: Option<&[u8]>,
+        client: Option<&ParfumoClient>,
+        status: &str,
+        logged_in_now: bool,
+    ) -> Result<String, SessionError> {
+        let mut revs = self.revs();
+        self.drop_link_state(user_id);
+        let cookies = client.map(|client| self.encrypt_cookies(user_id, client)).transpose()?;
+        let rev = self.db.link_put(user_id, mode, secret, cookies.as_deref(), status).map_err(internal)?;
+        if logged_in_now {
+            self.db.link_update_session(user_id, &rev, cookies.as_deref(), status, true).map_err(internal)?;
+        }
+        revs.insert(user_id, rev.clone());
+        if let Some(client) = client {
+            self.clients.lock().unwrap_or_else(|p| p.into_inner()).insert(user_id, client.clone());
+        }
+        Ok(rev)
     }
 
     pub fn link_info(&self, user_id: i64) -> Result<Option<LinkInfo>, SessionError> {
@@ -292,16 +364,16 @@ impl Sessions {
     }
 
     /// Credentials mode: logs in once with a fresh cookie jar; credentials are stored
-    /// (encrypted) only if Parfumo accepted them.
+    /// (encrypted) only if Parfumo accepted them. The account is linked as soon as the web
+    /// site accepts them; the application interface is then asked for a session, once:
+    /// without one, the tools read the web pages instead.
     pub async fn link_credentials(&self, user_id: i64, username: &str, password: &str) -> Result<(), SessionError> {
         let creds = Credentials { username: username.to_string(), password: password.to_string() };
         let client = self.new_client(user_id)?;
         login_with_retries(&client, &creds, self.cfg.user_min_interval * 2).await?;
         let secret = self.key.encrypt(&serde_json::to_vec(&creds).map_err(internal)?, &aad(user_id, "credentials")).map_err(internal)?;
-        let cookies = self.encrypt_cookies(user_id, &client)?;
-        let rev = self.db.link_put(user_id, "credentials", Some(&secret), Some(&cookies), "linked").map_err(internal)?;
-        self.db.link_update_session(user_id, Some(&cookies), "linked", true).map_err(internal)?;
-        self.replace_client(user_id, client, rev);
+        let rev = self.store_link(user_id, "credentials", Some(&secret), Some(&client), STATUS_LINKED, true)?;
+        self.ensure_app_session(user_id, &client, &rev).await;
         Ok(())
     }
 
@@ -313,28 +385,24 @@ impl Sessions {
             return Err(SessionError::Internal("no cookie found in the pasted text (expected `name=value; name=value`)".into()));
         }
         let logged_in = client.is_logged_in().await.unwrap_or(false);
-        let cookies = self.encrypt_cookies(user_id, &client)?;
-        let status = if logged_in { "linked" } else { "unverified" };
-        let rev = self.db.link_put(user_id, "cookie", None, Some(&cookies), status).map_err(internal)?;
-        self.replace_client(user_id, client, rev);
+        let status = if logged_in { STATUS_LINKED } else { "unverified" };
+        self.store_link(user_id, "cookie", None, Some(&client), status, false)?;
         Ok(logged_in)
     }
 
-    /// Erases credentials and cookies, and drops the in-memory session.
+    /// Erases credentials and cookies, and drops the in-memory session, the session token
+    /// of the application interface included.
     pub fn unlink(&self, user_id: i64) -> Result<bool, SessionError> {
-        self.link_revs.lock().unwrap_or_else(|p| p.into_inner()).remove(&user_id);
-        self.clients.lock().unwrap_or_else(|p| p.into_inner()).remove(&user_id);
-        self.forget_verified(user_id);
-        self.backoff.lock().unwrap_or_else(|p| p.into_inner()).remove(&user_id);
+        let mut revs = self.revs();
+        revs.remove(&user_id);
+        self.drop_link_state(user_id);
         self.db.link_delete(user_id).map_err(internal)
     }
 
     /// Returns a logged-in client, re-logging in when the session expired (credentials mode).
     /// Needed by account tools (jalons 2+); in jalon 1 it backs the "test session" button.
     pub async fn ensure_logged_in(&self, user_id: i64) -> Result<ParfumoClient, SessionError> {
-        let link = self.db.link_get(user_id).map_err(internal)?;
-        self.follow_link(user_id, link.as_ref().map(|l| l.rev.as_str()));
-        let link = link.ok_or(SessionError::NotLinked)?;
+        let link = self.follow(user_id)?.ok_or(SessionError::NotLinked)?;
         // Parfumo already refused this link: nothing is sent, not even a probe, until the
         // user links the account again on /link (which resets the status).
         if matches!(link.status.as_str(), STATUS_REAUTH | STATUS_EXPIRED) {
@@ -352,7 +420,9 @@ impl Sessions {
         }
         match client.is_logged_in().await {
             Ok(true) => {
-                self.ensure_app_session(user_id, &client, &link).await?;
+                if app_login_possible(&link) {
+                    self.ensure_app_session(user_id, &client, &link.rev).await;
+                }
                 return Ok(client);
             }
             Ok(false) => {}
@@ -363,108 +433,206 @@ impl Sessions {
             Err(e) => return Err(SessionError::Internal(e.to_string())),
         }
         let Some(secret) = link.secret.filter(|_| link.mode == "credentials") else {
-            self.db.link_update_session(user_id, link.cookies.as_deref(), STATUS_EXPIRED, false).map_err(internal)?;
+            self.db.link_update_session(user_id, &link.rev, link.cookies.as_deref(), STATUS_EXPIRED, false).map_err(internal)?;
             return Err(SessionError::ReauthRequired);
         };
         let plain = self.key.decrypt(&secret, &aad(user_id, "credentials")).map_err(internal)?;
         let creds: Credentials = serde_json::from_slice(&plain).map_err(internal)?;
+        // The web session only: the session of the application interface is another one,
+        // which this login neither ends nor needs to replace.
         client.clear_cookies();
-        match login_attempts(&client, &creds, self.cfg.user_min_interval * 2).await {
+        let outcome = login_attempts(&client, &creds, self.cfg.user_min_interval * 2).await;
+        // What is stored is what the client now holds, whatever the outcome: no web session
+        // after a failure, and the session token of the application interface, untouched.
+        // Written for the link the login was made for, never into the row of a newer one.
+        let cookies = self.encrypt_cookies(user_id, &client)?;
+        match outcome {
             Ok(_) => {
-                let cookies = self.encrypt_cookies(user_id, &client)?;
-                self.db.link_update_session(user_id, Some(&cookies), "linked", true).map_err(internal)?;
+                self.db.link_update_session(user_id, &link.rev, Some(&cookies), STATUS_LINKED, true).map_err(internal)?;
+                self.ensure_app_session(user_id, &client, &link.rev).await;
                 Ok(client)
             }
             // The credentials themselves were refused: stop for good.
             Err((e, true)) => {
-                self.db.link_update_session(user_id, None, STATUS_REAUTH, false).map_err(internal)?;
+                self.db.link_update_session(user_id, &link.rev, Some(&cookies), STATUS_REAUTH, false).map_err(internal)?;
                 Err(e)
             }
             // A captcha or an outage: the credentials may still be good. Wait before any
             // new attempt instead of repeating it on every tool call.
             Err((e, false)) => {
-                let status = if e == SessionError::CaptchaRequired { "captcha_required" } else { "login_failed" };
-                self.db.link_update_session(user_id, None, status, false).map_err(internal)?;
-                self.back_off(user_id, &e);
+                let status = if e == SessionError::CaptchaRequired { STATUS_CAPTCHA } else { STATUS_LOGIN_FAILED };
+                // Nothing is held against a newer link for what the previous one met.
+                if self.db.link_update_session(user_id, &link.rev, Some(&cookies), status, false).map_err(internal)? {
+                    self.back_off(user_id, &e);
+                }
                 Err(e)
             }
         }
     }
 }
 
+/// Stores the session of the application interface of a user when a tool call ends, however
+/// it ends: see [`Sessions::storing_app_session`].
+pub struct StoreAppSession<'a> {
+    sessions: &'a Sessions,
+    user_id: i64,
+}
+
+impl Drop for StoreAppSession<'_> {
+    fn drop(&mut self) {
+        self.sessions.store_app_session(self.user_id);
+    }
+}
+
+/// Whether a link, as it was last read, may log in to the application interface at all:
+/// credentials are stored, the interface did not refuse them, and the web site is not
+/// waiting for a human or for its own pause to end.
+fn app_login_possible(link: &crate::db::LinkRow) -> bool {
+    link.mode == "credentials" && link.secret.is_some() && !link.app_refused && link.status == STATUS_LINKED
+}
+
 impl Sessions {
-    /// Credentials mode: logs in to the application interface when the client holds no
-    /// session of it (the site ended it, or it was never obtained). One attempt, then a
-    /// pause: without it the tools read the web pages, which is no reason to insist.
-    async fn ensure_app_session(&self, user_id: i64, client: &ParfumoClient, link: &crate::db::LinkRow) -> Result<(), SessionError> {
-        if client.has_app_session() || link.mode != "credentials" {
-            return Ok(());
+    fn app_paused(&self, user_id: i64) -> bool {
+        let mut pauses = self.app_backoff.lock().unwrap_or_else(|p| p.into_inner());
+        let paused = pauses.get(&user_id).is_some_and(|until| std::time::Instant::now() < *until);
+        if !paused {
+            pauses.remove(&user_id);
         }
-        let Some(secret) = &link.secret else { return Ok(()) };
+        paused
+    }
+
+    /// Credentials mode: logs in to the application interface when the user holds no
+    /// session of it (the site ended it, or it was never obtained), unless something says
+    /// not to. Without a session the tools read the web pages, which is no reason to insist:
+    ///
+    /// - one login at a time per user: calls made together wait for the first one;
+    /// - credentials the interface refused are never sent to it again, until the account is
+    ///   linked again (recorded on the link: it holds across a restart);
+    /// - any other failure is followed by a pause;
+    /// - a session the site ended is renewed once; if the renewed one is lost again within
+    ///   the pause, no login until the pause is over;
+    /// - no login while the web site is waiting for a human, or for its own pause to end:
+    ///   the same credentials would be sent where they were just not accepted;
+    /// - nothing is sent while the site blocks the address.
+    ///
+    /// `rev` is the link the caller acts for: nothing is done, kept or recorded for a link
+    /// that is no longer the user's.
+    async fn ensure_app_session(&self, user_id: i64, client: &ParfumoClient, rev: &str) {
+        if client.has_app_session() || self.app_paused(user_id) {
+            return;
+        }
+        let lock = self.app_login.lock().unwrap_or_else(|p| p.into_inner()).entry(user_id).or_default().clone();
+        let _one_at_a_time = lock.lock().await;
+        // Another call of the same user may have logged in, or met a refusal, while this
+        // one waited; the account may have been linked again.
+        if client.has_app_session() || self.app_paused(user_id) || client.app_blocked() || self.backing_off(user_id).is_some() {
+            return;
+        }
+        let Ok(Some(link)) = self.db.link_get(user_id) else { return };
+        if link.rev != rev || !self.follows(user_id, rev) || !app_login_possible(&link) {
+            return;
+        }
+        let Some(secret) = &link.secret else { return };
         let now = std::time::Instant::now();
-        if self.app_backoff.lock().unwrap_or_else(|p| p.into_inner()).get(&user_id).is_some_and(|until| now < *until) {
-            return Ok(());
+        let renewal = client.app_session_ended();
+        if renewal {
+            let renewed = self.app_renewed.lock().unwrap_or_else(|p| p.into_inner()).get(&user_id).copied();
+            if let Some(at) = renewed.filter(|at| now.duration_since(*at) < LOGIN_BACKOFF) {
+                // Renewed a moment ago, and lost again: a login accepted and a token refused,
+                // call after call, is what gets an address blocked.
+                tracing::warn!("the renewed session of the application interface was refused: the web pages are used for a while");
+                self.app_backoff.lock().unwrap_or_else(|p| p.into_inner()).insert(user_id, at + LOGIN_BACKOFF);
+                return;
+            }
         }
-        let plain = self.key.decrypt(secret, &aad(user_id, "credentials")).map_err(internal)?;
-        let creds: Credentials = serde_json::from_slice(&plain).map_err(internal)?;
-        match client.app_login(&creds.username, &creds.password).await {
+        let creds = self.key.decrypt(secret, &aad(user_id, "credentials")).ok().and_then(|plain| serde_json::from_slice::<Credentials>(&plain).ok());
+        let Some(creds) = creds else {
+            tracing::warn!("the stored credentials cannot be read: no login to the application interface");
+            return;
+        };
+        let outcome = client.app_login(&creds.username, &creds.password).await;
+        // The account was linked again while the login was under way: its outcome says
+        // nothing of the new link, and the client did not keep the token.
+        if !self.follows(user_id, rev) {
+            return;
+        }
+        match outcome {
             Ok(()) => {
-                self.app_backoff.lock().unwrap_or_else(|p| p.into_inner()).remove(&user_id);
-                let cookies = self.encrypt_cookies(user_id, client)?;
-                self.db.link_update_session(user_id, Some(&cookies), &link.status, false).map_err(internal)?;
+                if renewal {
+                    self.app_renewed.lock().unwrap_or_else(|p| p.into_inner()).insert(user_id, now);
+                }
+                self.store_app_session(user_id);
+            }
+            Err(ClientError::InvalidCredentials) => {
+                tracing::warn!("the application interface refused the credentials: the web pages are used until the account is linked again");
+                if let Err(e) = self.db.link_set_app_refused(user_id, rev) {
+                    // Not recorded: at least no new attempt for a while.
+                    tracing::warn!(error = %e, "the refusal of the application interface could not be stored");
+                    self.app_backoff.lock().unwrap_or_else(|p| p.into_inner()).insert(user_id, now + LOGIN_BACKOFF);
+                }
             }
             Err(e) => {
+                // `ClientError` never carries a secret (tested in parfumo-client).
                 tracing::warn!(error = %e, "no session of the application interface: the web pages are used instead");
                 self.app_backoff.lock().unwrap_or_else(|p| p.into_inner()).insert(user_id, now + LOGIN_BACKOFF);
             }
         }
-        Ok(())
     }
 
-    /// Before a public read: gives the user's public client the session of the application
-    /// interface held by their linked account, so that the database tools use it. The public
-    /// client still reads web pages without the account's cookies.
+    /// Before a public read: makes sure that what the user's clients hold of the
+    /// application interface is the session of the account linked now, so that the database
+    /// tools read through it. The public client still reads web pages without the account's
+    /// cookies.
     ///
     /// The web session of the account is neither probed nor touched here: a public read
     /// must not depend on it. In credentials mode a missing session of the application
-    /// interface is asked for once, then left alone for a while if the login fails. Without
-    /// a linked account, the public client has no token and reads the web pages only.
-    pub async fn lend_app_session(&self, user_id: i64, public: &ParfumoClient) {
-        let Ok(Some(link)) = self.db.link_get(user_id) else {
-            public.forget_app_session();
-            return;
-        };
-        self.follow_link(user_id, Some(link.rev.as_str()));
-        let Ok(account) = self.client_for(user_id) else {
-            public.forget_app_session();
-            return;
-        };
-        // Credentials Parfumo already refused are not sent to it again.
-        if !matches!(link.status.as_str(), STATUS_REAUTH | STATUS_EXPIRED) {
-            let _ = self.ensure_app_session(user_id, &account, &link).await;
+    /// interface is asked for as [`Self::ensure_app_session`] allows. Without a linked
+    /// account there is no token, and the web pages are read.
+    pub async fn open_app_session(&self, user_id: i64) {
+        // Following the link drops the token of an account that is no longer the linked one.
+        let Ok(Some(link)) = self.follow(user_id) else { return };
+        // The account client brings the stored session with it, whatever the state of the link.
+        let Ok(account) = self.client_for(user_id) else { return };
+        if app_login_possible(&link) {
+            self.ensure_app_session(user_id, &account, &link.rev).await;
         }
-        account.share_app_session_with(public);
     }
 
-    /// After a public read: when the site refused the token that was lent, the account
-    /// forgets it too, in memory and in the database. The next read logs in to the
-    /// application interface again, once.
-    pub fn return_app_session(&self, user_id: i64, public: &ParfumoClient) {
-        if public.has_app_session() {
+    /// Stores the session of the application interface of `user_id` when it changed since
+    /// it was last stored: a token the site refused must not come back from the database
+    /// after a restart, and a token just obtained must be found there. Written for the link
+    /// this process follows, and only if it is still the user's link.
+    pub fn store_app_session(&self, user_id: i64) {
+        let limiter = self.limiter(user_id);
+        if !limiter.take_app_session_change() {
             return;
         }
+        // Under the lock of the links: the client and the `rev` are those of one link.
+        let revs = self.revs();
         let account = self.clients.lock().unwrap_or_else(|p| p.into_inner()).get(&user_id).cloned();
-        let Some(account) = account.filter(|a| a.has_app_session()) else { return };
-        account.forget_app_session();
-        if let (Ok(cookies), Ok(Some(link))) = (self.encrypt_cookies(user_id, &account), self.db.link_get(user_id)) {
-            let _ = self.db.link_update_session(user_id, Some(&cookies), &link.status, false);
+        let (Some(rev), Some(account)) = (revs.get(&user_id), account) else { return };
+        let stored = self.encrypt_cookies(user_id, &account).and_then(|cookies| self.db.link_store_cookies(user_id, rev, &cookies).map_err(internal));
+        if let Err(e) = stored {
+            tracing::warn!(error = %e, "the session of the application interface could not be stored");
+            // Tried again when the next call ends.
+            limiter.flag_app_session_change();
         }
     }
 
-    /// Ends the pause that follows a failed login to the application interface (tests).
+    /// For the length of a tool call: when the value returned is dropped, the session of
+    /// the application interface is stored if the call changed it (see
+    /// [`Self::store_app_session`]), also when the call is abandoned half-way.
+    pub fn storing_app_session(&self, user_id: i64) -> StoreAppSession<'_> {
+        StoreAppSession { sessions: self, user_id }
+    }
+
+    /// Ends the pauses of the login to the application interface: the one that follows a
+    /// failed login, and the one that follows a renewed session lost at once (tests: time
+    /// cannot be advanced).
     #[cfg(any(test, feature = "test-util"))]
     pub fn end_app_backoff(&self, user_id: i64) {
         self.app_backoff.lock().unwrap_or_else(|p| p.into_inner()).remove(&user_id);
+        self.app_renewed.lock().unwrap_or_else(|p| p.into_inner()).remove(&user_id);
     }
 }
 
@@ -521,7 +689,8 @@ impl Sessions {
     ///
     /// An unchanged account keeps its stored session and its status: the cookies of the
     /// last run are reused instead of logging in at every start, and credentials Parfumo
-    /// refused are not sent again until they change. A different account replaces the
+    /// refused (its web site, or its application interface) are not sent again to the one
+    /// that refused them until they change. A different account replaces the
     /// stored one. Without an account in the environment, the one a previous start took
     /// from it is erased, and one linked on the local login page is kept. Returns whether
     /// the stored link changed.
@@ -546,7 +715,7 @@ impl Sessions {
             return Ok(false);
         }
         let secret = self.key.encrypt(&source, &aad(user_id, kind)).map_err(internal)?;
-        let cookies = match account {
+        let client = match account {
             LocalAccount::Credentials(_) => None,
             LocalAccount::Cookie(header) => {
                 let client = self.new_client(user_id)?;
@@ -555,15 +724,11 @@ impl Sessions {
                         "{ENV_LOCAL_COOKIE} holds no cookie (expected `pf_auth=value`, or a whole `Cookie` header)"
                     )));
                 }
-                Some(self.encrypt_cookies(user_id, &client)?)
+                Some(client)
             }
         };
-        self.clients.lock().unwrap_or_else(|p| p.into_inner()).remove(&user_id);
-        self.forget_verified(user_id);
-        self.backoff.lock().unwrap_or_else(|p| p.into_inner()).remove(&user_id);
-        let rev = self.db.link_put(user_id, mode, Some(&secret), cookies.as_deref(), "linked").map_err(internal)?;
+        self.store_link(user_id, mode, Some(&secret), client.as_ref(), STATUS_LINKED, false)?;
         self.db.link_mark_from_env(user_id).map_err(internal)?;
-        self.link_revs.lock().unwrap_or_else(|p| p.into_inner()).insert(user_id, rev);
         Ok(true)
     }
 }

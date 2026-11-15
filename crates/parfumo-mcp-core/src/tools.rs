@@ -171,12 +171,14 @@ impl ParfumoTools {
         let sessions = &self.state.sessions;
         let outcome = match sessions.public_client_for(user.id) {
             Ok(client) => {
-                // A linked account lends its session of the application interface: the
-                // database is then read through it, and through the web pages otherwise.
-                sessions.lend_app_session(user.id, &client).await;
-                let outcome = f(client.clone()).await;
-                sessions.return_app_session(user.id, &client);
-                outcome
+                // The session of the application interface of the linked account, which the
+                // public client shares: the database is then read through it, and through
+                // the web pages otherwise.
+                sessions.open_app_session(user.id).await;
+                // When the site ends that session during the read, it is forgotten in the
+                // database too, even if the call is abandoned before its end.
+                let _stored = sessions.storing_app_session(user.id);
+                f(client).await
             }
             Err(e) => Err(ToolError::new(crate::errors::ErrorCode::UpstreamError, e.to_string())),
         };
@@ -198,6 +200,9 @@ impl ParfumoTools {
         let writes = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
         let outcome = async {
             let public = sessions.public_client_for(user.id).map_err(|e| self.session_err(e))?;
+            // An account tool reads through the application interface too: a session the
+            // site ends there is forgotten in the database when the call ends, however it ends.
+            let _stored = sessions.storing_app_session(user.id);
             let account = sessions.account_client(user.id).await.map_err(|e| self.session_err(e))?;
             match f(Clients { account, public: public.clone(), user_id: user.id, writes: writes.clone() }).await {
                 Err(e) if e.code == crate::errors::ErrorCode::ReauthRequired => {
@@ -226,6 +231,10 @@ impl ParfumoTools {
             Err(e) => e.code.as_str(),
         };
         let (target_short, _) = paging::truncate_chars(target, 200);
+        // Every tool ends here, also those that take the account client themselves: what
+        // the call did to the session of the application interface is stored (nothing is
+        // written when it did nothing).
+        self.state.sessions.store_app_session(user.id);
         self.state.db.audit(user, tool, &target_short, code, ms, writes);
         tracing::info!(user = %user.name, tool, result = code, duration_ms = ms, writes, "tool call");
         Ok(match outcome {

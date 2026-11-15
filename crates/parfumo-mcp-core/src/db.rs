@@ -50,7 +50,10 @@ CREATE TABLE IF NOT EXISTS parfumo_links (
     -- sees that another process linked a different account.
     rev           TEXT NOT NULL DEFAULT '',
     -- Stdio server: the account came from the environment of the process.
-    from_env      INTEGER NOT NULL DEFAULT 0
+    from_env      INTEGER NOT NULL DEFAULT 0,
+    -- The application interface refused these credentials: they are not sent to it again
+    -- until the account is linked again.
+    app_refused   INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS oauth_clients (
     client_id     TEXT PRIMARY KEY,
@@ -158,6 +161,9 @@ pub struct LinkRow {
     pub rev: String,
     /// Stdio server: the account came from the environment of the process.
     pub from_env: bool,
+    /// The application interface refused the credentials of this link: only linking the
+    /// account again clears it.
+    pub app_refused: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -255,6 +261,12 @@ impl Db {
                 "ALTER TABLE parfumo_links ADD COLUMN rev TEXT NOT NULL DEFAULT '';
                  ALTER TABLE parfumo_links ADD COLUMN from_env INTEGER NOT NULL DEFAULT 0;",
             )?;
+        }
+        // Databases created before the application interface was used do not say whether it
+        // refused the credentials of a link.
+        let has_app_refused = conn.prepare("SELECT 1 FROM pragma_table_info('parfumo_links') WHERE name = 'app_refused'")?.exists([])?;
+        if !has_app_refused {
+            conn.execute_batch("ALTER TABLE parfumo_links ADD COLUMN app_refused INTEGER NOT NULL DEFAULT 0")?;
         }
         Ok(Self(Arc::new(Mutex::new(conn))))
     }
@@ -383,7 +395,7 @@ impl Db {
         Ok(self
             .conn()
             .query_row(
-                "SELECT mode, secret, cookies, status, linked_at, last_login_at, rev, from_env FROM parfumo_links WHERE user_id = ?1",
+                "SELECT mode, secret, cookies, status, linked_at, last_login_at, rev, from_env, app_refused FROM parfumo_links WHERE user_id = ?1",
                 [user_id],
                 |r| {
                     Ok(LinkRow {
@@ -395,6 +407,7 @@ impl Db {
                         last_login_at: r.get(5)?,
                         rev: r.get(6)?,
                         from_env: r.get(7)?,
+                        app_refused: r.get(8)?,
                     })
                 },
             )
@@ -402,12 +415,14 @@ impl Db {
     }
 
     /// Stores the link of a user, replacing any earlier one, and returns its new `rev`.
+    /// Whatever was held against the earlier link (where it came from, a refusal of its
+    /// credentials by the application interface) goes with it.
     pub fn link_put(&self, user_id: i64, mode: &str, secret: Option<&[u8]>, cookies: Option<&[u8]>, status: &str) -> Result<String, DbError> {
         let rev = crate::crypto::new_secret("");
         self.conn().execute(
             "INSERT INTO parfumo_links (user_id, mode, secret, cookies, status, linked_at, rev) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
              ON CONFLICT(user_id) DO UPDATE SET mode = ?2, secret = ?3, cookies = ?4, status = ?5, linked_at = ?6, rev = ?7, \
-             last_login_at = NULL, from_env = 0",
+             last_login_at = NULL, from_env = 0, app_refused = 0",
             params![user_id, mode, secret, cookies, status, now(), rev],
         )?;
         Ok(rev)
@@ -419,13 +434,29 @@ impl Db {
         Ok(())
     }
 
-    pub fn link_update_session(&self, user_id: i64, cookies: Option<&[u8]>, status: &str, logged_in_now: bool) -> Result<(), DbError> {
-        self.conn().execute(
+    /// Stores the outcome of a login to the web site for the link `rev`. Returns `false`,
+    /// and writes nothing, when the user's link is no longer that one: a session that
+    /// belongs to an earlier link is never written into the row of a newer one.
+    pub fn link_update_session(&self, user_id: i64, rev: &str, cookies: Option<&[u8]>, status: &str, logged_in_now: bool) -> Result<bool, DbError> {
+        let rows = self.conn().execute(
             "UPDATE parfumo_links SET cookies = ?2, status = ?3, \
-             last_login_at = CASE WHEN ?4 THEN ?5 ELSE last_login_at END WHERE user_id = ?1",
-            params![user_id, cookies, status, logged_in_now, now()],
+             last_login_at = CASE WHEN ?4 THEN ?5 ELSE last_login_at END WHERE user_id = ?1 AND rev = ?6",
+            params![user_id, cookies, status, logged_in_now, now(), rev],
         )?;
-        Ok(())
+        Ok(rows > 0)
+    }
+
+    /// Stores the cookies of the link `rev` (the session token of the application interface
+    /// is one of them), leaving its status alone. `false`, and nothing written, when the
+    /// user's link is no longer that one.
+    pub fn link_store_cookies(&self, user_id: i64, rev: &str, cookies: &[u8]) -> Result<bool, DbError> {
+        Ok(self.conn().execute("UPDATE parfumo_links SET cookies = ?3 WHERE user_id = ?1 AND rev = ?2", params![user_id, rev, cookies])? > 0)
+    }
+
+    /// Records that the application interface refused the credentials of the link `rev`.
+    /// `false`, and nothing written, when the user's link is no longer that one.
+    pub fn link_set_app_refused(&self, user_id: i64, rev: &str) -> Result<bool, DbError> {
+        Ok(self.conn().execute("UPDATE parfumo_links SET app_refused = 1 WHERE user_id = ?1 AND rev = ?2", params![user_id, rev])? > 0)
     }
 
     /// Unlink: credentials and cookies are erased.
@@ -833,6 +864,45 @@ mod hardening_tests {
         // Opening the same database again must not fail on the existing columns.
         let again = Db::init(std::mem::replace(&mut *db.conn(), Connection::open_in_memory().unwrap())).unwrap();
         assert_eq!(again.link_get(1).unwrap().unwrap().rev, second);
+    }
+
+    #[test]
+    fn a_database_of_version_0_2_gains_the_refusal_of_the_application_interface() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, token_hash TEXT NOT NULL UNIQUE, created_at INTEGER NOT NULL);
+             CREATE TABLE parfumo_links (user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE, mode TEXT NOT NULL, secret BLOB, \
+             cookies BLOB, status TEXT NOT NULL, linked_at INTEGER NOT NULL, last_login_at INTEGER, rev TEXT NOT NULL DEFAULT '', \
+             from_env INTEGER NOT NULL DEFAULT 0);
+             INSERT INTO users VALUES (1, 'local', 'h', 1);
+             INSERT INTO parfumo_links VALUES (1, 'credentials', x'01', x'00', 'linked', 5, NULL, 'rev-1', 1);",
+        )
+        .unwrap();
+        let db = Db::init(conn).unwrap();
+        let old = db.link_get(1).unwrap().unwrap();
+        assert_eq!((old.rev.as_str(), old.from_env, old.app_refused), ("rev-1", true, false), "an existing link is kept, and was not refused");
+
+        // The refusal is recorded on the link it was met for, and on no other.
+        assert!(!db.link_set_app_refused(1, "another-rev").unwrap());
+        assert!(!db.link_get(1).unwrap().unwrap().app_refused);
+        assert!(db.link_set_app_refused(1, "rev-1").unwrap());
+        assert!(db.link_get(1).unwrap().unwrap().app_refused);
+        // Opening the same database again must not fail on the existing column, and keeps it.
+        let db = Db::init(std::mem::replace(&mut *db.conn(), Connection::open_in_memory().unwrap())).unwrap();
+        assert!(db.link_get(1).unwrap().unwrap().app_refused, "the refusal survives a restart");
+        // Only linking the account again clears it.
+        let rev = db.link_put(1, "credentials", Some(b"s"), None, "linked").unwrap();
+        assert!(!db.link_get(1).unwrap().unwrap().app_refused);
+
+        // What belongs to an earlier link is never written into the row of the new one.
+        assert!(!db.link_store_cookies(1, "rev-1", b"old").unwrap());
+        assert!(!db.link_update_session(1, "rev-1", Some(b"old"), "captcha_required", true).unwrap());
+        let link = db.link_get(1).unwrap().unwrap();
+        assert_eq!((link.cookies.as_deref(), link.status.as_str(), link.last_login_at), (None, "linked", None));
+        assert!(db.link_store_cookies(1, &rev, b"new").unwrap());
+        assert!(db.link_update_session(1, &rev, Some(b"newer"), "linked", true).unwrap());
+        let link = db.link_get(1).unwrap().unwrap();
+        assert_eq!((link.cookies.as_deref(), link.last_login_at.is_some()), (Some(&b"newer"[..]), true));
     }
 
     #[test]
