@@ -608,16 +608,10 @@ impl ParfumoClient {
 
     /// Fragrance note (or note category) and one page (20 items) of perfumes containing it.
     /// `r` is a URL, a path (`/Fragrance_Note/Bergamot` for a note, `/Fragrance_Notes/Citric_notes`
-    /// for a category), a slug or a note name.
+    /// for a category), a slug or a note name. Always read from the web site: the
+    /// application interface gives no address for the note, its categories or the brand of
+    /// its perfumes, and a name does not designate the same note there.
     pub async fn get_note(&self, r: &str, page: u32) -> Result<NotePage, ClientError> {
-        // Through the application interface when a session of it is held and it designates
-        // the note with certainty (a number, a name one note bears, a top-level category);
-        // the web site otherwise.
-        if self.has_app_session()
-            && let Some(answer) = crate::app::settle(self.app_note(r, page).await)
-        {
-            return answer;
-        }
         let (absolute, path) = self.ref_path(r)?;
         if absolute {
             let (prefix, category) = if path.starts_with(routes::NOTE_CATEGORY_PREFIX) {

@@ -5,7 +5,6 @@ mod account;
 mod app;
 mod app_brand;
 mod app_db;
-mod app_note;
 mod app_own;
 mod app_perfumer;
 mod app_rankings;
