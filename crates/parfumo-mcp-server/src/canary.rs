@@ -277,18 +277,22 @@ impl Runner {
             return None;
         }
         let c = &lent.client;
+        // Read before the session is opened: the login that renews it after a refusal is a
+        // call of the interface too, and one answered 429 leaves no other trace.
+        let waits = c.app_waits();
         let held = lent.lend().await;
-        // A block known before the read, from an earlier call of any user of the process or
-        // from the login just made: the read would go to the web site under the name of the
-        // interface.
-        if c.app_blocked() {
-            self.interface_asks_to_wait(name, function, true, None);
+        // The interface asked to wait before the read: a block known from an earlier call of
+        // any user of the process, or what the login just made was answered. The read would
+        // go to the web site under the name of the interface.
+        let blocked = c.app_blocked();
+        if blocked || c.app_waits() != waits {
+            self.interface_asks_to_wait(name, function, blocked, None);
             return None;
         }
         // Events are counted, where a state would be read too late: a tool call of the same
         // user that logs in again before this read is over leaves no trace of the refusal
         // in the state of the session.
-        let (refusals, generation, waits) = (c.app_session_refusals(), c.app_session_generation(), c.app_waits());
+        let (refusals, generation) = (c.app_session_refusals(), c.app_session_generation());
         // The token is looked for again once the counts are read: one refused or dropped
         // from here on is counted, and one that went between the two is not lent. Without a
         // token the read would go to the web site under the name of the interface.
@@ -856,7 +860,8 @@ fn without_session(link: Result<Option<LinkInfo>, SessionError>) -> (Outcome, St
 }
 
 /// The `interface` area of one run, for the account of `user_id`. Without a token it is one
-/// line, which says why: see [`without_session`].
+/// line, which says why: see [`without_session`], unless the reason is that the interface
+/// asks to wait, which stops the run here as it does at any read of the area.
 async fn interface_area(r: &mut Runner, sessions: &Sessions, user_id: i64, web_p_id: Option<u64>) {
     const A: &str = INTERFACE;
     let (name, function) = APP_SESSION;
@@ -869,8 +874,22 @@ async fn interface_area(r: &mut Runner, sessions: &Sessions, user_id: i64, web_p
         Err(e) => return r.push(A, "client", "ParfumoClient::new", Outcome::Failed, e.to_string(), None),
     };
     let lent = Lent { sessions, user_id, client };
+    // Read before the session is opened: the login made for an account without a token is a
+    // call of the interface, and one answered 429 leaves no other trace.
+    let waits = lent.client.app_waits();
     if !lent.lend().await {
-        let (outcome, detail) = without_session(sessions.link_info(user_id));
+        let link = sessions.link_info(user_id);
+        // Only for an account the sessions log in for: they sent no login because the site
+        // blocks the address, or the login was told to wait. No login failed for a reason the
+        // server log holds, and the pages of the account are not to be asked either. Any
+        // other account asks nothing of the interface, whatever the interface would answer.
+        let logs_in = matches!(&link, Ok(Some(link)) if link.mode == "credentials");
+        let blocked = lent.client.app_blocked();
+        if logs_in && (blocked || lent.client.app_waits() != waits) {
+            r.interface_asks_to_wait(name, function, blocked, None);
+            return;
+        }
+        let (outcome, detail) = without_session(link);
         r.push(A, name, function, outcome, detail, None);
         return;
     }
