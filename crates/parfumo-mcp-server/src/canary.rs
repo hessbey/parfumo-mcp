@@ -5,13 +5,26 @@
 //! The canary only reads. It sends no write, not even a dry run, and sees the site as it is
 //! now, like every read of the tools. It goes through the same rate limiter as
 //! the tools (one request per second), and stops at once on a captcha or a rate limit.
+//!
+//! Parfumo is read through its web pages and through its application interface, and both
+//! are checked. The run has three areas:
+//! - `public`: the web pages, by a client that holds no session token of the application
+//!   interface (`/app/v1`), as for a user without a linked account;
+//! - `interface`: the reads the application interface serves, with the session token of the
+//!   canary account, as for every user whose account is linked. Without a token the area is
+//!   skipped and nothing is asked of the interface; a token it refuses is a failed check,
+//!   and is not sent again;
+//! - `account`: the pages of the canary account on the web site.
 
 use std::{future::Future, time::Instant};
 
-use parfumo_client::{BlogFeed, ClientError, ParfumoClient, RankingKind, ReviewSort, SearchQuery, SettingsPage, SimilarOptions, SoukKind, TextKind};
+use parfumo_client::{
+    BlogFeed, ClientError, Listing, ParfumoClient, PerfumeSummary, RankingKind, ReviewSort, SearchQuery, SettingsPage, SimilarOptions, SoukKind,
+    TextKind,
+};
 use serde::{Deserialize, Serialize};
 
-use parfumo_mcp_core::db;
+use parfumo_mcp_core::{db, sessions::Sessions};
 
 use crate::web::ServerState;
 
@@ -21,6 +34,16 @@ const BRAND: &str = "Dior";
 const NOTE: &str = "Bergamot";
 const SEARCH_TEXT: &str = "sauvage";
 const FORUM_CATEGORY: &str = "perfume-discussions";
+/// A release year long past, whose listing no longer moves much: the year of [`PERFUME`].
+const YEAR: u16 = 2015;
+
+/// Name of the area of the reads made through the application interface.
+const INTERFACE: &str = "interface";
+/// What a check of that area says when the answer does not bear the mark of the interface.
+const NOT_THE_INTERFACE: &str = "the application interface did not answer this read (the web site did), or its answer changed";
+/// Why the area is skipped for a user without a session token.
+const NO_TOKEN: &str = "no session token of the application interface is held for this user (the Parfumo account gets one when it is linked \
+                        with its e-mail and password): nothing is asked of /app/v1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -37,7 +60,7 @@ pub enum Outcome {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Check {
-    /// `public` or `account`.
+    /// `public`, `interface` or `account`.
     pub area: String,
     pub name: String,
     /// The client function behind the check, to find the parser in `parfumo-client`.
@@ -90,7 +113,7 @@ impl Report {
                 Outcome::Failed => "FAILED ",
                 Outcome::Skipped => "skipped",
             };
-            out.push_str(&format!("{mark}  {:<7}  {:<28}  {:>6} ms  {}  [{}]\n", c.area, c.name, c.duration_ms, c.detail, c.function));
+            out.push_str(&format!("{mark}  {:<9}  {:<28}  {:>6} ms  {}  [{}]\n", c.area, c.name, c.duration_ms, c.detail, c.function));
         }
         out
     }
@@ -111,6 +134,9 @@ struct Runner {
     stop: Option<String>,
     /// Set when the account session is unusable: the account checks are skipped.
     account_stop: Option<String>,
+    /// Set when the application interface refused the session token: nothing more is asked
+    /// of it, with or without that token.
+    interface_stop: Option<String>,
 }
 
 impl Runner {
@@ -134,13 +160,89 @@ impl Runner {
         read: impl Future<Output = Result<T, ClientError>>,
         expect: impl FnOnce(&T) -> Result<String, String>,
     ) -> Option<T> {
-        let blocked = self.stop.clone().or_else(|| if area == "account" { self.account_stop.clone() } else { None });
-        if let Some(why) = blocked {
+        if let Some(why) = self.blocked(area) {
             self.skip(area, name, function, &why);
             return None;
         }
         let started = Instant::now();
-        match read.await {
+        let answer = read.await;
+        self.judge(area, name, function, answer, expect, started)
+    }
+
+    /// Why nothing more is sent for this area, if so.
+    fn blocked(&self, area: &str) -> Option<String> {
+        self.stop.clone().or_else(|| match area {
+            "account" => self.account_stop.clone(),
+            INTERFACE => self.interface_stop.clone(),
+            _ => None,
+        })
+    }
+
+    /// One read through the application interface, on the client `c` that was lent the
+    /// session token of the account and holds no cookie of it.
+    ///
+    /// The client reads the web site instead whenever the interface does not serve a read,
+    /// and after the interface refused the token (which the client then forgets). Neither
+    /// may pass for an answer of the interface: `expect` looks for what only the interface
+    /// fills, and a token that is gone after the read is a refusal. The refusal is reported
+    /// once, as a failed check; the checks that follow are skipped, so that the refused
+    /// token is not sent again and nothing is asked of the interface without one.
+    async fn check_interface<T>(
+        &mut self,
+        c: &ParfumoClient,
+        name: &str,
+        function: &str,
+        read: impl Future<Output = Result<T, ClientError>>,
+        expect: impl FnOnce(&T) -> Result<String, String>,
+    ) -> Option<T> {
+        const A: &str = INTERFACE;
+        if let Some(why) = self.blocked(A) {
+            self.skip(A, name, function, &why);
+            return None;
+        }
+        // Without a token the read would go to the web site under the name of the interface.
+        if !c.has_app_session() {
+            self.skip(A, name, function, "no session token of the application interface is held");
+            return None;
+        }
+        let started = Instant::now();
+        let answer = read.await;
+        let refused = !c.has_app_session();
+        if refused {
+            self.interface_stop = Some(format!("the application interface refused the session token at `{name}`"));
+        }
+        match answer {
+            // A captcha or a rate limit stops the whole run, whichever side met it.
+            Err(e @ (ClientError::CaptchaRequired | ClientError::RateLimited { .. })) => self.judge(A, name, function, Err(e), expect, started),
+            // Whatever came back was read from the web site, or is its error: it says
+            // nothing of the interface.
+            _ if refused => {
+                let detail = "the application interface refused the session token: it is forgotten and not sent again";
+                self.push(A, name, function, Outcome::Failed, detail.to_string(), Some(started));
+                None
+            }
+            // The token is still held: the read was left to the web site, which wants the
+            // account this client does not carry.
+            Err(ClientError::LoginRequired | ClientError::InvalidCredentials) => {
+                let detail = "the application interface did not answer this read: it was left to the web site, which asks for a login";
+                self.push(A, name, function, Outcome::Changed, detail.to_string(), Some(started));
+                None
+            }
+            answer => self.judge(A, name, function, answer, expect, started),
+        }
+    }
+
+    /// Records the outcome of one read from its answer. Returns the value when the check passed.
+    fn judge<T>(
+        &mut self,
+        area: &str,
+        name: &str,
+        function: &str,
+        answer: Result<T, ClientError>,
+        expect: impl FnOnce(&T) -> Result<String, String>,
+        started: Instant,
+    ) -> Option<T> {
+        match answer {
             Ok(value) => match expect(&value) {
                 Ok(found) => {
                     self.push(area, name, function, Outcome::Ok, found, Some(started));
@@ -196,6 +298,23 @@ fn any(n: usize, what: &str) -> Result<String, String> {
 
 fn filled(value: &str, what: &str) -> Result<(), String> {
     if value.trim().is_empty() { Err(format!("the {what} is empty")) } else { Ok(()) }
+}
+
+/// A listing read from the search index of the application interface. Its rows carry the
+/// number of the perfume, which the rows of a web page never do: a row without it was read
+/// from the web site in place of the interface, or the rows of the interface changed.
+fn index_rows(l: &Listing<PerfumeSummary>, what: &str) -> Result<String, String> {
+    if l.items.iter().any(|p| p.name.trim().is_empty() || p.url.is_empty()) {
+        return Err("a row has no name or no link".into());
+    }
+    if l.items.iter().any(|p| p.p_id.is_none()) {
+        return Err(format!("a row has no perfume number: {NOT_THE_INTERFACE}"));
+    }
+    // The tools page through a listing by this count.
+    if !l.total_items.is_some_and(|total| total > 0) {
+        return Err("the count of matches is missing".into());
+    }
+    some(l.items.len(), what)
 }
 
 /// Reads of the public site, as the anonymous client of the tools does.
@@ -416,6 +535,109 @@ async fn public_checks(r: &mut Runner, c: &ParfumoClient) {
     }
 }
 
+/// Reads through the application interface (`/app/v1`), as the tools make them for a user
+/// whose linked account lends its session token: `c` holds that token and no cookie of the
+/// account. Only the reads the interface serves are checked here; the others stay on the
+/// web pages, which the `public` area reads.
+async fn interface_checks(r: &mut Runner, c: &ParfumoClient) {
+    // The cheapest call first: a token the interface no longer accepts is known at once.
+    // This client carries no cookie of the account, so the web site cannot answer here.
+    r.check_interface(c, "own nickname", "own_nick", c.own_nick(), |n| filled(n, "nickname").map(|()| "found".to_string())).await;
+    let query = SearchQuery { text: Some(SEARCH_TEXT.into()), ..SearchQuery::default() };
+    r.check_interface(c, "search", "search_perfumes", c.search_perfumes(&query, 1), |l| index_rows(l, "results")).await;
+    let perfume = r
+        .check_interface(c, "perfume", "get_perfume", c.get_perfume(PERFUME), |p| {
+            filled(&p.name, "perfume name")?;
+            filled(&p.brand.name, "brand")?;
+            // The record of the web page never numbers the brand.
+            if p.brand.numeric_id.is_none() {
+                return Err(format!("the brand has no number: {NOT_THE_INTERFACE}"));
+            }
+            if p.p_id.is_none() {
+                return Err("the numeric id is missing".into());
+            }
+            let notes = p.notes.top.len() + p.notes.heart.len() + p.notes.base.len() + p.notes.flat.len();
+            // Unlike the web record, this one says nothing when a part is missing.
+            if notes == 0 || p.ratings.is_empty() || p.perfumers.is_empty() || p.classification.is_empty() {
+                return Err(format!(
+                    "{notes} notes, {} ratings, {} perfumers, {} classification groups",
+                    p.ratings.len(),
+                    p.perfumers.len(),
+                    p.classification.len()
+                ));
+            }
+            // The interface knows the page of a perfumer by number only, and learns it here.
+            if p.perfumers.iter().any(|perfumer| perfumer.numeric_id.is_none()) {
+                return Err("a perfumer has no number".into());
+            }
+            if !p.warnings.is_empty() {
+                return Err(format!("the reader warns: {}", p.warnings.join("; ")));
+            }
+            Ok(format!("{notes} notes, {} ratings, {} classification groups", p.ratings.len(), p.classification.len()))
+        })
+        .await;
+    r.check_interface(c, "brand", "get_brand", c.get_brand(BRAND, 1), |b| {
+        filled(&b.brand.name, "brand name")?;
+        index_rows(&b.perfumes, "perfumes")
+    })
+    .await;
+    match perfume.as_ref().and_then(|p| p.perfumers.first()) {
+        Some(perfumer) => {
+            r.check_interface(c, "perfumer", "get_perfumer", c.get_perfumer(&perfumer.id, 1), |b| {
+                filled(&b.perfumer.name, "perfumer name")?;
+                index_rows(&b.perfumes, "perfumes")
+            })
+            .await;
+        }
+        None => r.skip(INTERFACE, "perfumer", "get_perfumer", "needs the perfumer of the `perfume` check"),
+    }
+    r.check_interface(c, "release year", "get_rankings", c.get_rankings(&RankingKind::Year(YEAR), 1), |l| index_rows(l, "perfumes")).await;
+    // The dupes directory is a page of the web site, read in the `public` area.
+    let similar = SimilarOptions { resolve_urls: 1, include_layering: false, include_dupes: false };
+    r.check_interface(c, "similar perfumes", "get_similar_perfumes_with", c.get_similar_perfumes_with(PERFUME, similar), |s| {
+        if !s.warnings.is_empty() {
+            return Err(format!("the reader warns: {}", s.warnings.join("; ")));
+        }
+        if s.similar.first().is_some_and(|p| p.url.is_none()) {
+            return Err("the first similar perfume has no link".into());
+        }
+        // The web list only has the votes of the rows whose link it resolved; the
+        // interface sends them with every row.
+        if !s.similar.iter().skip(similar.resolve_urls).any(|p| p.votes.is_some()) {
+            return Err(format!("no row after the first has its votes: {NOT_THE_INTERFACE}"));
+        }
+        some(s.similar.len(), "similar perfumes")
+    })
+    .await;
+}
+
+/// The `interface` area of one run, for the account of `user_id`.
+///
+/// The client is one of its own, made like the public client of a tool call: no cookie of
+/// the account, the request slot of the user, and the session token the account lends. The
+/// token is asked for and given back the way a tool call does it: whether an account that
+/// holds none logs in for one is left to the sessions (once, then not for a while), and a
+/// token the interface refused is forgotten by the account as well. The canary itself asks
+/// nothing of the interface without a token.
+async fn interface_area(r: &mut Runner, sessions: &Sessions, user_id: i64) {
+    const A: &str = INTERFACE;
+    if let Some(why) = r.stop.clone() {
+        r.skip(A, "application session", "lend_app_session", &why);
+        return;
+    }
+    let client = match sessions.uncached_public_client(user_id) {
+        Ok(client) => client,
+        Err(e) => return r.push(A, "client", "ParfumoClient::new", Outcome::Failed, e.to_string(), None),
+    };
+    sessions.lend_app_session(user_id, &client).await;
+    if !client.has_app_session() {
+        r.skip(A, "application session", "lend_app_session", NO_TOKEN);
+        return;
+    }
+    interface_checks(r, &client).await;
+    sessions.return_app_session(user_id, &client);
+}
+
 /// Reads of the linked (test) account. Lists may be empty: the parsers still check the
 /// structure of the page around them.
 async fn account_checks(r: &mut Runner, c: &ParfumoClient, p_id: Option<u64>) {
@@ -495,14 +717,17 @@ async fn account_checks(r: &mut Runner, c: &ParfumoClient, p_id: Option<u64>) {
 }
 
 /// One full run. `user`: the server user whose linked Parfumo account is read after the
-/// public pages (`None`: public pages only). The report is stored and logged.
+/// public pages, through the application interface and then on the web site (`None`:
+/// public pages only). The report is stored and logged.
 pub async fn run(state: &ServerState, user: Option<&db::User>) -> Report {
     let started_at = db::now();
+    let sessions = &state.core.sessions;
     let mut r = Runner::default();
     // Limiter slot of the canary user, or of nobody (0): the global budget applies anyway.
     let slot = user.map(|u| u.id).unwrap_or(0);
     let mut p_id = None;
-    match state.core.sessions.uncached_public_client(slot) {
+    // This client is never lent a token: it reads the web pages, whatever the account holds.
+    match sessions.uncached_public_client(slot) {
         Ok(client) => {
             public_checks(&mut r, &client).await;
             if user.is_some() && r.stop.is_none() {
@@ -513,10 +738,11 @@ pub async fn run(state: &ServerState, user: Option<&db::User>) -> Report {
         Err(e) => r.push("public", "client", "ParfumoClient::new", Outcome::Failed, e.to_string(), None),
     }
     if let Some(user) = user {
+        interface_area(&mut r, sessions, user.id).await;
         if let Some(why) = r.stop.clone() {
             r.skip("account", "account session", "account_client", &why);
         } else {
-            match state.core.sessions.account_client(user.id).await {
+            match sessions.account_client(user.id).await {
                 Ok(client) => account_checks(&mut r, &client, p_id).await,
                 Err(e) => r.push("account", "account session", "account_client", Outcome::Failed, e.to_string(), None),
             }
@@ -718,7 +944,7 @@ mod tests {
         };
         assert_eq!(report.summary(), "canary changed: 1 ok, 1 changed, 0 failed, 0 skipped (public pages only)");
         let text = report.text();
-        assert!(text.contains("CHANGED  public   perfume") && text.contains("[get_perfume]"), "{text}");
+        assert!(text.contains("CHANGED  public     perfume") && text.contains("[get_perfume]"), "{text}");
         assert_eq!(report.problems().len(), 1);
         let db = db::Db::open_in_memory().unwrap();
         db.canary_put(&report.status, &serde_json::to_string(&report).unwrap()).unwrap();
