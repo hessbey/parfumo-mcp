@@ -44,7 +44,8 @@ struct Asked {
     /// The token of the `Authorization: Bearer` header, if any.
     bearer: Option<String>,
     cookie: String,
-    /// The status it was answered with.
+    /// When it arrived, and the status it was answered with.
+    at: Instant,
     status: u16,
 }
 
@@ -206,7 +207,14 @@ async fn handler(State(parfumo): State<Parfumo>, method: Method, uri: Uri, heade
     let text = |name: header::HeaderName| headers.get(name).and_then(|v| v.to_str().ok()).map(str::to_string);
     let target = uri.path_and_query().map(|p| p.as_str().to_string()).unwrap_or_default();
     let bearer = text(header::AUTHORIZATION).and_then(|v| v.strip_prefix("Bearer ").map(str::to_string));
-    let mut asked = Asked { method: method.clone(), target: target.clone(), bearer, cookie: text(header::COOKIE).unwrap_or_default(), status: 0 };
+    let mut asked = Asked {
+        method: method.clone(),
+        target: target.clone(),
+        bearer,
+        cookie: text(header::COOKIE).unwrap_or_default(),
+        at: Instant::now(),
+        status: 0,
+    };
     let answer = if asked.member_call() {
         interface(&parfumo, asked.call().unwrap_or_default(), uri.query().unwrap_or_default(), asked.bearer.as_deref())
     } else if uri.path() == "/Perfumes/Dior" && parfumo.brand_on_the_web_only.load(Ordering::SeqCst) {
@@ -729,28 +737,30 @@ async fn a_run_that_was_stopped_asks_nothing_of_the_interface() {
 /// the account session without it) take their turn in the request slot of the user.
 #[tokio::test]
 async fn the_clients_of_the_canary_wait_in_the_request_slot_of_the_user() {
-    let interval = Duration::from_millis(100);
+    let interval = Duration::from_millis(200);
     let (app, parfumo, user) = stand_in(interval).await;
     link_account(&app.state.core, user.id, "alice").await;
     let sessions = &app.state.core.sessions;
     let account = sessions.account_client(user.id).await.unwrap();
     parfumo.forget_asked();
 
-    let started = Instant::now();
     // A request of the account client takes the slot: every request after it has to wait.
     assert!(account.is_logged_in().await.unwrap());
     let mut r = Runner::default();
     interface_area(&mut r, sessions, user.id, None).await;
     let web = without_token(sessions, user.id, &account).unwrap();
     web.own_nick().await.unwrap();
-    let elapsed = started.elapsed();
 
     assert!(r.checks.iter().all(|c| c.outcome == Outcome::Ok), "{:?}", r.checks);
-    let requests = parfumo.asked().len() as u32;
-    assert!(requests >= 10, "{requests} requests");
-    // One interval before each request but the first. A client with a slot of its own
-    // would send its first request at once, and the run would be one interval shorter.
-    assert!(elapsed >= interval * (requests - 1), "{requests} requests in {elapsed:?}");
+    let asked = parfumo.asked();
+    assert!(asked.len() >= 12, "{} requests", asked.len());
+    // Each request left one interval after the one before, whichever client sent it: a
+    // client with a slot of its own would send its first request at once. Arrivals are
+    // compared, hence the margin; none of it is needed to tell an interval from no wait.
+    for pair in asked.windows(2) {
+        let gap = pair[1].at.duration_since(pair[0].at);
+        assert!(gap >= interval / 2, "{} came {gap:?} after {}", pair[1].target, pair[0].target);
+    }
 }
 
 #[test]
