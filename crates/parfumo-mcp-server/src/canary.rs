@@ -997,3 +997,6 @@ mod area_tests {
         assert_eq!(r.checks.iter().map(|c| c.outcome).collect::<Vec<_>>(), [Outcome::Changed, Outcome::Ok]);
     }
 }
+
+#[cfg(test)]
+mod site_tests;
