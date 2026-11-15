@@ -79,8 +79,13 @@ fn tenth(percent: f64) -> f32 {
 
 /// A text of the site as plain text: line breaks kept, markup and entities removed.
 pub(crate) fn plain(html: &str) -> String {
-    // Line breaks are the `<br />` of the site; the raw ones that follow them are not kept.
-    let broken = html.replace(['\r', '\n'], "").replace("<br />", "\n").replace("<br/>", "\n").replace("<br>", "\n");
+    // The site writes a line break as `<br />` followed by the raw one it stands for: the
+    // two are one break. A raw break alone is a break too: what a text without `<br />`
+    // looks like was not recorded, and its lines must not be glued together.
+    let mut broken = html.replace("\r\n", "\n").replace('\r', "\n");
+    for br in ["<br />", "<br/>", "<br>"] {
+        broken = broken.replace(&format!("{br}\n"), "\n").replace(br, "\n");
+    }
     let text: String = scraper::Html::parse_fragment(&broken).root_element().text().collect();
     let mut lines: Vec<&str> = text.lines().map(str::trim).collect();
     lines.dedup_by(|a, b| a.is_empty() && b.is_empty());
@@ -651,7 +656,7 @@ mod tests {
 
     use serde_json::{Value, json};
 
-    use super::{MAX_PERFUMES, MAX_REFUSAL_CHARS, Unserved, refusal, remember};
+    use super::{MAX_PERFUMES, MAX_REFUSAL_CHARS, Unserved, plain, refusal, remember};
     use crate::{ClientConfig, GlobalLimiter, ParfumoClient};
 
     fn client() -> ParfumoClient {
@@ -745,6 +750,15 @@ mod tests {
         let long = refusal(&json!({"error": format!("Too\n busy {}", "x".repeat(1_000))}));
         let Some(Unserved::Refused(words)) = long else { panic!("{long:?}") };
         assert!(words.starts_with("Too busy x") && words.chars().count() == MAX_REFUSAL_CHARS, "{words}");
+    }
+
+    #[test]
+    fn a_line_break_is_one_break_with_or_without_the_markup_of_the_site() {
+        // The recorded texts: `<br />` followed by the raw break it stands for.
+        assert_eq!(plain("One.<br />\r\nTwo.<br />\nThree.<br>Four."), "One.\nTwo.\nThree.\nFour.");
+        // Raw breaks alone part lines too, and never glue two words together.
+        assert_eq!(plain("One.\r\nTwo.\nThree\rfour."), "One.\nTwo.\nThree\nfour.");
+        assert_eq!(plain("One.<br />\r\n<br />\r\n\r\nTwo &amp; <b>three</b>."), "One.\n\nTwo & three.");
     }
 
     /// The rows of the recorded `GET /search?filter=creed` name the perfume and its

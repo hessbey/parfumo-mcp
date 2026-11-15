@@ -558,6 +558,11 @@ async fn facts_and_description_are_plain_text_and_never_the_german_ones() {
     assert_eq!(p.facts.as_deref(), Some("First fact.\nSecond fact, by someone & co."));
     assert_eq!(p.description.as_deref(), Some("A perfume by Creed & friends."));
 
+    // Not recorded either: facts whose lines are parted by raw line breaks, without the
+    // `<br />` of the site. A line break is one, and no two words are glued together.
+    site.serve(3, |r| r["p"]["info_en"] = "Launched in 2010.\r\nThe bottle was redesigned in 2015.\nA best\nseller.".into());
+    assert_eq!(c.get_perfume("3").await.unwrap().facts.as_deref(), Some("Launched in 2010.\nThe bottle was redesigned in 2015.\nA best\nseller."));
+
     // German facts alone: the English page shows none, and neither does the record.
     site.serve(2, |r| r["p"]["info"] = "Deutsche Fakten.".into());
     assert_eq!(c.get_perfume("2").await.unwrap().facts, None);
