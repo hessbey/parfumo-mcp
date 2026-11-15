@@ -606,7 +606,12 @@ impl ParfumoClient {
                 brand.country = page.country;
                 brand.founded = brand.founded.or(page.founded);
             }
-            Err(e) => brand.warnings.push(format!("country unavailable: {e}")),
+            Err(e) => {
+                // The warning names all that the page was read for: a brand left without a
+                // founding year must not pass for one Parfumo states none of.
+                let missing = if brand.founded.is_none() { "country and founding year" } else { "country" };
+                brand.warnings.push(format!("{missing} unavailable: {e}"));
+            }
         }
         brand
     }

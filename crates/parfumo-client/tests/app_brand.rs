@@ -350,10 +350,11 @@ async fn without_a_session_of_the_application_only_the_web_site_is_asked() {
     assert_eq!(site.asked(), ["/Perfumes/Creed?current_page=2"], "one web page, and nothing of the interface");
 }
 
-/// The country is read on the web page of the brand. When that page cannot be read, the
-/// brand of the interface is given all the same, and says what it lacks.
+/// The country is read on the web page of the brand, and so is the founding year when the
+/// interface has none. When that page cannot be read, the brand of the interface is given
+/// all the same, and says what it lacks.
 #[tokio::test]
-async fn a_brand_whose_web_page_cannot_be_read_is_given_without_its_country_and_says_so() {
+async fn a_brand_whose_web_page_cannot_be_read_is_given_without_what_the_page_shows_and_says_so() {
     let details = BRAND_DETAILS.replace(r#""name_url": "Creed""#, r#""name_url": "Elsewhere""#);
     assert_ne!(details, BRAND_DETAILS);
     let (c, site) = client_of(&details).await;
@@ -361,7 +362,18 @@ async fn a_brand_whose_web_page_cannot_be_read_is_given_without_its_country_and_
     site.take();
     let b = c.get_brand("Creed", 1).await.unwrap();
     assert_eq!(site.take(), ["/app/v1/search?filter=Creed", FIRST_PAGE_OF_CREED, "/Perfumes/Elsewhere"]);
-    assert_eq!((b.brand.id.as_str(), b.country, b.perfumes.items.len()), ("Elsewhere", None, 5));
+    assert_eq!((b.brand.id.as_str(), b.country, b.founded, b.perfumes.items.len()), ("Elsewhere", None, None, 5));
+    // The recorded brand has no founding year ("0"): the page was to give it too, and a
+    // reader must not take the brand for one Parfumo states no founding year of.
+    assert_eq!(b.warnings, ["country and founding year unavailable: not found: /Perfumes/Elsewhere"]);
+
+    // The same brand with a founding year of the interface: the country alone is missing.
+    let dated = details.replace(r#""founding_year": "0""#, r#""founding_year": "1760""#);
+    assert_ne!(dated, details);
+    let (c, _site) = client_of(&dated).await;
+    c.app_login("someone@example.org", "pw").await.unwrap();
+    let b = c.get_brand("Creed", 1).await.unwrap();
+    assert_eq!((b.country, b.founded), (None, Some(1760)));
     assert_eq!(b.warnings, ["country unavailable: not found: /Perfumes/Elsewhere"]);
 }
 
