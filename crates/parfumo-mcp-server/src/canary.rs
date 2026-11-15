@@ -666,10 +666,15 @@ fn interface_record(p: &PerfumeDetails) -> Result<String, String> {
     if p.perfumers.iter().any(|perfumer| perfumer.numeric_id.is_none()) {
         return Err("a perfumer has no number".into());
     }
-    if !p.warnings.is_empty() {
-        return Err(format!("the reader warns: {}", p.warnings.join("; ")));
-    }
+    // The rank label is read on the web page of the perfume: the reader warns when it could not.
+    unwarned(&p.warnings)?;
     Ok(format!("{notes} notes, {} ratings, {} classification groups", p.ratings.len(), p.classification.len()))
+}
+
+/// A read of the interface that a page of the web site completes says so when the page
+/// could not be read, or when a part of its own is missing.
+fn unwarned(warnings: &[String]) -> Result<(), String> {
+    if warnings.is_empty() { Ok(()) } else { Err(format!("the reader warns: {}", warnings.join("; "))) }
 }
 
 /// The similar perfumes read from the application interface, which sends the votes with
@@ -705,6 +710,8 @@ async fn interface_checks(r: &mut Runner, lent: &Lent<'_>, web_p_id: Option<u64>
     let perfume = r.check_interface(lent, "perfume", "get_perfume", c.get_perfume(PERFUME), None, interface_record).await;
     r.check_interface(lent, "brand", "get_brand", c.get_brand(BRAND, 1), None, |b| {
         filled(&b.brand.name, "brand name")?;
+        // The country is read on the web page of the brand: the reader warns when it could not.
+        unwarned(&b.warnings)?;
         index_rows(&b.perfumes, "perfumes")
     })
     .await;
@@ -712,6 +719,7 @@ async fn interface_checks(r: &mut Runner, lent: &Lent<'_>, web_p_id: Option<u64>
         Some(perfumer) => {
             r.check_interface(lent, "perfumer", "get_perfumer", c.get_perfumer(&perfumer.id, 1), None, |b| {
                 filled(&b.perfumer.name, "perfumer name")?;
+                unwarned(&b.warnings)?;
                 index_rows(&b.perfumes, "perfumes")
             })
             .await;

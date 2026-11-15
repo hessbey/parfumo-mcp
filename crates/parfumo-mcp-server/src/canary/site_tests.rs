@@ -197,6 +197,19 @@ fn interface(parfumo: &Parfumo, call: &str, query: &str, bearer: Option<&str>) -
     json(StatusCode::OK, answer)
 }
 
+/// The three pages of the web site that complete a read of the interface: the page of the
+/// perfume (its rank label), of its brand and of its perfumer (their country). The web site
+/// of the account tests has none of them.
+const COMPLETING_PAGES: [(&str, &str); 3] = [
+    ("/Perfumes/Dior/Sauvage_Eau_de_Toilette", "perfume_sauvage.html"),
+    ("/Perfumes/Dior", "brand.html"),
+    ("/Perfumers/JeanChristophe_Herault", "perfumer.html"),
+];
+
+fn completing_page(path: &str) -> Option<&'static str> {
+    COMPLETING_PAGES.iter().find(|(page, _)| *page == path).map(|(_, file)| *file)
+}
+
 /// Everything but the calls made as a member is the web site of the account tests, asked
 /// as it was asked here.
 async fn web_site(parfumo: &Parfumo, method: Method, target: &str, headers: &HeaderMap, body: axum::body::Bytes) -> Response {
@@ -230,8 +243,8 @@ async fn handler(State(parfumo): State<Parfumo>, method: Method, uri: Uri, heade
     };
     let answer = if asked.member_call() {
         interface(&parfumo, asked.call().unwrap_or_default(), uri.query().unwrap_or_default(), asked.bearer.as_deref())
-    } else if uri.path() == "/Perfumes/Dior" && parfumo.brand_on_the_web_only.load(Ordering::SeqCst) {
-        Html(fixture("brand.html")).into_response()
+    } else if let Some(page) = completing_page(uri.path()) {
+        Html(fixture(page)).into_response()
     } else {
         web_site(&parfumo, method, &target, &headers, body).await
     };
@@ -351,11 +364,15 @@ async fn the_interface_area_reads_the_application_interface_with_the_token_of_th
     }
     // As the member, with the token of the account and none of its cookies; no login.
     assert!(calls.iter().all(|a| a.bearer.as_deref() == Some(token.as_str()) && a.cookie.is_empty() && a.status == 200), "{calls:?}");
-    // And of the interface alone: between the first call and the last, nothing was asked of
-    // the web site, so no read of the area was left to it.
+    // And of the interface: between the first call and the last, the web site was only
+    // asked for the three pages that complete a read of the interface (the rank label of
+    // the perfume, the country of the brand and of the perfumer), without token nor cookie.
+    // No read of the area was left to it.
     let first = asked.iter().position(|a| a.call().is_some()).unwrap();
     let last = asked.iter().rposition(|a| a.call().is_some()).unwrap();
-    assert!(asked[first..=last].iter().all(|a| a.call().is_some()), "a read of the area went to the web site: {:?}", &asked[first..=last]);
+    let web: Vec<&Asked> = asked[first..=last].iter().filter(|a| a.call().is_none()).collect();
+    assert_eq!(web.iter().map(|a| a.path()).collect::<Vec<_>>(), COMPLETING_PAGES.map(|(page, _)| page), "{web:?}");
+    assert!(web.iter().all(|a| a.method == Method::GET && a.bearer.is_none() && a.cookie.is_empty()), "{web:?}");
     // The public pages were read before, by a client without token nor cookie.
     assert!(asked[..first].iter().all(|a| a.bearer.is_none() && a.cookie.is_empty()), "{:?}", &asked[..first]);
 

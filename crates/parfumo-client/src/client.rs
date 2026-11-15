@@ -333,7 +333,10 @@ impl ParfumoClient {
         if self.has_app_session()
             && let Some(answer) = crate::app::settle(self.app_perfume_record(r).await)
         {
-            return answer;
+            return match answer {
+                Ok(record) => Ok(self.with_rank(record).await),
+                Err(e) => Err(e),
+            };
         }
         let (mut details, ctx) = self.perfume_ctx(r, false).await?;
         match &ctx.class_h {
@@ -350,6 +353,19 @@ impl ParfumoClient {
             }
         }
         Ok(details)
+    }
+
+    /// Completes a record read through the application interface with the one thing the
+    /// interface does not give: the rank label of the web page ("Ranked 31 in Men's
+    /// Perfume"). The page is read for it, so that a linked account is told nothing less
+    /// than the web site shows. When the page cannot be read, the record is returned
+    /// without the label and a warning says so.
+    async fn with_rank(&self, mut record: PerfumeDetails) -> PerfumeDetails {
+        match self.perfume_ctx(&record.id, false).await {
+            Ok((page, _)) => record.ranking = page.ranking,
+            Err(e) => record.warnings.push(format!("ranking unavailable: {e}")),
+        }
+        record
     }
 
     /// Calls an `h`-bound endpoint of a perfume. On an empty body the perfume page is
@@ -573,6 +589,38 @@ impl ParfumoClient {
         Ok(html)
     }
 
+    /// The first page of a brand or a perfumer on the web site, by its slug: where the
+    /// country is shown, which the application interface names by a number only.
+    async fn entity_head_page(&self, prefix: &str, slug: &str) -> Result<String, ClientError> {
+        let (_, html) = self.t.get(&format!("{prefix}{slug}"), Some(RECORD_TTL), false, false).await?;
+        Ok(html)
+    }
+
+    /// Completes a brand read through the application interface with what only the web
+    /// page shows: the country, and the founding year when the interface has none. When
+    /// the page cannot be read, the brand is returned without them and a warning says so.
+    async fn with_brand_head(&self, mut brand: BrandPage) -> BrandPage {
+        let page = self.entity_head_page(routes::PERFUMES_PREFIX, &brand.brand.id).await.and_then(|html| parse::parse_brand_page(&html, 1));
+        match page {
+            Ok(page) => {
+                brand.country = page.country;
+                brand.founded = brand.founded.or(page.founded);
+            }
+            Err(e) => brand.warnings.push(format!("country unavailable: {e}")),
+        }
+        brand
+    }
+
+    /// The same for a perfumer: the country.
+    async fn with_perfumer_head(&self, mut perfumer: PerfumerPage) -> PerfumerPage {
+        let page = self.entity_head_page(routes::PERFUMERS_PREFIX, &perfumer.perfumer.id).await.and_then(|html| parse::parse_perfumer_page(&html, 1));
+        match page {
+            Ok(page) => perfumer.country = page.country,
+            Err(e) => perfumer.warnings.push(format!("country unavailable: {e}")),
+        }
+        perfumer
+    }
+
     /// Brand record and one page (20 items) of its perfumes. `r` is a URL, a path
     /// (`/Perfumes/Dior`), a slug or a brand name.
     pub async fn get_brand(&self, r: &str, page: u32) -> Result<BrandPage, ClientError> {
@@ -581,7 +629,10 @@ impl ParfumoClient {
         if self.has_app_session()
             && let Some(answer) = crate::app::settle(self.app_get_brand(r, page).await)
         {
-            return answer;
+            return match answer {
+                Ok(brand) => Ok(self.with_brand_head(brand).await),
+                Err(e) => Err(e),
+            };
         }
         let html = self.entity_page(r, routes::PERFUMES_PREFIX, routes::LIVESEARCH_BRAND, page, "brand").await?;
         parse::parse_brand_page(&html, page)
@@ -595,7 +646,10 @@ impl ParfumoClient {
         if self.has_app_session()
             && let Some(answer) = crate::app::settle(self.app_get_perfumer(r, page).await)
         {
-            return answer;
+            return match answer {
+                Ok(perfumer) => Ok(self.with_perfumer_head(perfumer).await),
+                Err(e) => Err(e),
+            };
         }
         let html = self.entity_page(r, routes::PERFUMERS_PREFIX, routes::LIVESEARCH_PERFUMER, page, "perfumer").await?;
         parse::parse_perfumer_page(&html, page)

@@ -106,6 +106,9 @@ async fn handler(State(site): State<Arc<Site>>, uri: Uri, headers: HeaderMap, _b
         return match uri.path() {
             "/api/alive" => json(r#"{"csrf_key":"fixturecsrfkey00"}"#),
             "/Perfumes/Dior/Sauvage_Eau_de_Toilette" => html(WEB_PERFUME),
+            // The page of the recorded perfume of the interface: the page of another one,
+            // of which only the rank label is read. The other perfumes of Creed have none.
+            "/Perfumes/Creed/aventus" => html(WEB_PERFUME),
             "/action/perfume/get_classification_chart.php" => html(WEB_CLASSIFICATION),
             "/action/perfume/get_reviews.php" => html(WEB_REVIEWS),
             "/action/perfume/get_statements.php" => html(WEB_STATEMENTS),
@@ -318,7 +321,9 @@ async fn a_listing_without_its_count_or_a_refusal_in_json_is_left_to_the_web_sea
 async fn a_perfume_record_is_read_by_number_with_the_parts_of_the_web_record() {
     let (c, site) = logged_in().await;
     let p = c.get_perfume("9438").await.unwrap();
-    assert_eq!(site.take(), ["/app/v1/perfume_details/9438"], "one call, no web page");
+    assert_eq!(site.take(), ["/app/v1/perfume_details/9438", "/Perfumes/Creed/aventus"], "one call, and the web page for the rank label");
+    // The one thing the interface does not give is read on the web page.
+    assert_eq!(p.ranking.as_deref(), Some("Ranked 30 in Men's Perfume"));
 
     assert_eq!((p.id.as_str(), p.p_id, p.name.as_str()), ("Creed/aventus", Some(9438), "Aventus"));
     assert_eq!((p.brand.id.as_str(), p.brand.numeric_id, p.brand.name.as_str()), ("Creed", Some(253), "Creed"));
@@ -350,9 +355,8 @@ async fn a_perfume_record_is_read_by_number_with_the_parts_of_the_web_record() {
     // The address is built from the base address of the client, like every other one of the record.
     assert_eq!(p.url, format!("{}/Perfumes/Creed/aventus", c.base_url()));
     assert!(p.image_url.is_some());
-    // The rank label of the web page is not in the answer of the interface: it stays
-    // absent, without a warning. The recorded perfume has no facts.
-    assert_eq!((p.ranking, p.facts), (None, None));
+    // The recorded perfume has no facts.
+    assert_eq!(p.facts, None);
     assert!(p.warnings.is_empty(), "{:?}", p.warnings);
 }
 
@@ -583,12 +587,19 @@ async fn a_perfume_named_by_its_id_is_found_through_its_brand_then_remembered() 
         [
             "/app/v1/search?filter=Creed",
             "/app/v1/perfumes?page=1&per_page=20&filter=absolu+aventus&b_id=253&g_f=1&g_m=1&g_u=1",
-            "/app/v1/perfume_details/225233"
+            "/app/v1/perfume_details/225233",
+            "/Perfumes/Creed/absolu-aventus"
         ]
+    );
+    // The web page, asked for the rank label, cannot be read (the fake has none for this
+    // perfume): the record of the interface is given all the same, and says what it lacks.
+    assert_eq!(
+        (p.ranking.as_deref(), p.warnings.as_slice()),
+        (None, ["ranking unavailable: not found: /Perfumes/Creed/absolu-aventus".to_string()].as_slice())
     );
     // Met once, known from then on, whatever the letter case of the reference.
     c.get_perfume("creed/Absolu-Aventus").await.unwrap();
-    assert_eq!(site.take(), ["/app/v1/perfume_details/225233"], "only the record itself is asked again");
+    assert_eq!(site.take(), ["/app/v1/perfume_details/225233", "/Perfumes/Creed/absolu-aventus"], "only the record itself is looked up again");
     assert!(matches!(c.get_perfume("not a reference").await.unwrap_err(), ClientError::InvalidInput(_)));
     assert!(site.take().is_empty());
 }
@@ -737,9 +748,10 @@ async fn a_perfume_found_while_the_memory_of_numbers_overflows_is_still_found() 
         [
             "/app/v1/search?filter=Creed",
             "/app/v1/perfumes?page=1&per_page=20&filter=absolu+aventus&b_id=253&g_f=1&g_m=1&g_u=1",
-            "/app/v1/perfume_details/225233"
+            "/app/v1/perfume_details/225233",
+            "/Perfumes/Creed/absolu-aventus"
         ],
-        "the record is read from the interface, which found the perfume"
+        "the record is read from the interface, which found the perfume; the web page is asked for the rank label only"
     );
     assert_eq!(p.p_id, Some(225233));
 }
@@ -773,7 +785,7 @@ async fn the_address_of_a_remembered_perfume_is_refreshed_from_the_answers_of_th
         let _ = c.get_perfume("Creed/Aventus_Old").await;
         assert_eq!(site.take()[0], "/app/v1/search?filter=Creed");
         c.get_perfume("Creed/aventus").await.unwrap();
-        assert_eq!(site.take(), ["/app/v1/perfume_details/9438"], "known under its address of today, without a lookup");
+        assert_eq!(site.take(), ["/app/v1/perfume_details/9438", "/Perfumes/Creed/aventus"], "known under its address of today, without a lookup");
 
         // What the search lists and no read met is not remembered: it is looked up.
         let listed: Value = serde_json::from_str(SEARCH_CREED).unwrap();

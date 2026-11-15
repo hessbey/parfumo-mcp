@@ -22,8 +22,10 @@ use parfumo_client::{ClientConfig, ClientError, GlobalLimiter, ParfumoClient};
 const PERFUMER_DETAILS: &str = include_str!("fixtures/app_perfumer_details.json");
 /// The record of a perfume this perfumer made: it names them by number, name and slug.
 const PERFUME_DETAILS: &str = include_str!("fixtures/app_perfume_details.json");
-/// The web page of another perfumer.
+/// The web page of another perfumer (France), served for every perfumer.
 const PERFUMER_PAGE: &str = include_str!("fixtures/perfumer.html");
+/// The page of the web site the country of the recorded perfumer is read on.
+const WEB_PAGE: &str = "/Perfumers/JeanChristophe_Herault";
 
 /// The only call the tests expect for the recorded perfumer, page aside: the one the
 /// application makes when it opens the page of a perfumer.
@@ -113,14 +115,19 @@ async fn client(logged_in: bool) -> (ParfumoClient, Arc<Site>) {
 async fn a_perfumer_is_read_by_number_with_one_page_of_their_creations() {
     let (c, site) = client(true).await;
     let p = c.get_perfumer("509", 1).await.unwrap();
-    assert_eq!(site.asked.lock().unwrap().as_slice(), [details(1)], "one call, the one the application makes, no web page");
+    assert_eq!(
+        site.asked.lock().unwrap().as_slice(),
+        [details(1), WEB_PAGE.to_string()],
+        "one call, the one the application makes, and the web page for the country"
+    );
 
     assert_eq!(
         (p.perfumer.id.as_str(), p.perfumer.numeric_id, p.perfumer.name.as_str()),
         ("JeanChristophe_Herault", Some(509), "Jean-Christophe Hérault")
     );
     assert_eq!(p.perfumer.url, format!("{}/Perfumers/JeanChristophe_Herault", c.base_url()));
-    assert_eq!(p.country, None, "the interface gives the number of a country, not its name");
+    assert_eq!(p.country.as_deref(), Some("France"), "the interface gives the number of a country: its name is read on the web page");
+    assert!(p.warnings.is_empty(), "{:?}", p.warnings);
 
     // 135 creations, 20 a page.
     assert_eq!((p.perfumes.page, p.perfumes.total_items, p.perfumes.total_pages), (1, Some(135), Some(7)));
@@ -141,11 +148,11 @@ async fn a_perfumer_is_read_by_number_with_one_page_of_their_creations() {
 
     // The page teaches the number of its perfumer: their slug is enough for the next pages.
     let next = c.get_perfumer("JeanChristophe_Herault", 2).await.unwrap();
-    assert_eq!(site.asked.lock().unwrap().as_slice(), [details(1), details(2)]);
+    assert_eq!(site.asked.lock().unwrap().as_slice(), [details(1), WEB_PAGE.to_string(), details(2), WEB_PAGE.to_string()]);
     assert_eq!(next.perfumes.page, 2);
     // A page before the first is the first.
     c.get_perfumer("509", 0).await.unwrap();
-    assert_eq!(site.asked.lock().unwrap().last().unwrap(), &details(1));
+    assert_eq!(site.asked.lock().unwrap()[4..], [details(1), WEB_PAGE.to_string()]);
 }
 
 #[tokio::test]
@@ -170,8 +177,11 @@ async fn a_perfumer_met_in_a_perfume_record_is_found_by_address_slug_or_name() {
         assert_eq!(p.perfumer.numeric_id, Some(509), "{reference}");
     }
     let asked = site.asked.lock().unwrap().clone();
-    assert_eq!(asked.len(), 7, "{asked:?}");
-    assert!(asked.iter().all(|a| *a == details(3)), "nothing is asked to find the perfumer, and no web page is read: {asked:?}");
+    assert_eq!(asked.len(), 14, "{asked:?}");
+    assert!(
+        asked.chunks(2).all(|read| read == [details(3), WEB_PAGE.to_string()]),
+        "nothing is asked to find the perfumer; the web page is read for the country only: {asked:?}"
+    );
 }
 
 #[tokio::test]
@@ -205,7 +215,10 @@ async fn a_perfumer_never_met_is_read_from_the_web_page() {
 async fn a_long_listing_stops_where_the_application_stops() {
     let (c, site) = client(true).await;
     let p = c.get_perfumer("510", 50).await.unwrap();
-    assert_eq!(site.asked.lock().unwrap().as_slice(), ["/app/v1/perfumer_details?pf_id=510&page=50&per_page=20&o=nr_desc&g_f=1&g_m=1&g_u=1"]);
+    assert_eq!(
+        site.asked.lock().unwrap().as_slice(),
+        ["/app/v1/perfumer_details?pf_id=510&page=50&per_page=20&o=nr_desc&g_f=1&g_m=1&g_u=1", WEB_PAGE]
+    );
     // Every creation is counted, but the pages end at the thousandth row, as on the web site.
     assert_eq!((p.perfumes.page, p.perfumes.total_items, p.perfumes.total_pages), (50, Some(43518), Some(50)));
 }

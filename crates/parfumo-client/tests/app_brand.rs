@@ -37,6 +37,12 @@ fn search_one(b_id: u64, name: &str) -> String {
     )
 }
 
+/// The web page of another brand (Dior: France, founded in 1946), served as the page of
+/// Creed: only its country and its founding year are read.
+const BRAND_PAGE: &str = include_str!("fixtures/brand.html");
+/// The page of the web site the country of the recorded brand is read on.
+const WEB_PAGE_OF_CREED: &str = "/Perfumes/Creed";
+
 const FIRST_PAGE_OF_CREED: &str = "/app/v1/brand_details?b_id=253&page=1&per_page=20&o=nr_desc&g_f=1&g_m=1&g_u=1";
 
 struct Site {
@@ -63,7 +69,11 @@ async fn handler(State(site): State<Arc<Site>>, uri: Uri, headers: HeaderMap, _b
     let asked = uri.path_and_query().map(|p| p.as_str().to_string()).unwrap_or_default();
     site.asked.lock().unwrap().push(asked.clone());
     let json = |text: &str| (StatusCode::OK, [(header::CONTENT_TYPE, "application/json")], text.to_string()).into_response();
-    // The fake has no web page: whatever is left to the web site is not found there.
+    // The fake has one web page, the one of the recorded brand: whatever else is left to
+    // the web site is not found there.
+    if uri.path() == WEB_PAGE_OF_CREED {
+        return (StatusCode::OK, [(header::CONTENT_TYPE, "text/html; charset=utf-8")], BRAND_PAGE).into_response();
+    }
     if !uri.path().starts_with("/app/v1/") {
         return (StatusCode::NOT_FOUND, "<html><body>Not found</body></html>").into_response();
     }
@@ -126,12 +136,14 @@ async fn logged_in() -> (ParfumoClient, Arc<Site>) {
 async fn a_brand_named_by_its_slug_is_found_by_the_search_then_read_in_one_call() {
     let (c, site) = logged_in().await;
     let b = c.get_brand("Creed", 1).await.unwrap();
-    assert_eq!(site.take(), ["/app/v1/search?filter=Creed", FIRST_PAGE_OF_CREED], "no web page is read");
+    assert_eq!(site.take(), ["/app/v1/search?filter=Creed", FIRST_PAGE_OF_CREED, WEB_PAGE_OF_CREED], "the web page is read for the country");
 
     assert_eq!((b.brand.id.as_str(), b.brand.numeric_id, b.brand.name.as_str()), ("Creed", Some(253), "Creed"));
     assert_eq!(b.brand.url, format!("{}/Perfumes/Creed", c.base_url()));
-    // The interface names the country by a number only, and has no founding year for this brand ("0").
-    assert_eq!((b.country, b.founded), (None, None));
+    // The interface names the country by a number only, and has no founding year for this
+    // brand ("0"): both are read on the web page of the brand.
+    assert_eq!((b.country.as_deref(), b.founded), (Some("France"), Some(1946)));
+    assert!(b.warnings.is_empty(), "{:?}", b.warnings);
 
     assert_eq!((b.perfumes.page, b.perfumes.total_items, b.perfumes.total_pages), (1, Some(104), Some(6)));
     let names: Vec<&str> = b.perfumes.items.iter().map(|p| p.name.as_str()).collect();
@@ -158,12 +170,19 @@ async fn an_address_a_path_and_a_name_reach_the_brand_and_the_page_asked_is_pass
     let (c, site) = logged_in().await;
     // An address of a perfume of the brand, with a query: the brand is its first part.
     c.get_brand(&format!("{}/Perfumes/Creed/aventus?x=1", c.base_url()), 3).await.unwrap();
-    assert_eq!(site.take(), ["/app/v1/search?filter=Creed", "/app/v1/brand_details?b_id=253&page=3&per_page=20&o=nr_desc&g_f=1&g_m=1&g_u=1"]);
+    assert_eq!(
+        site.take(),
+        ["/app/v1/search?filter=Creed", "/app/v1/brand_details?b_id=253&page=3&per_page=20&o=nr_desc&g_f=1&g_m=1&g_u=1", WEB_PAGE_OF_CREED]
+    );
 
     // The letter case of a slug does not matter.
     for (reference, words) in [("/Perfumes/creed/", "creed"), ("Perfumes/CREED", "CREED")] {
         let b = c.get_brand(reference, 0).await.unwrap();
-        assert_eq!(site.take(), [format!("/app/v1/search?filter={words}"), FIRST_PAGE_OF_CREED.to_string()], "{reference}");
+        assert_eq!(
+            site.take(),
+            [format!("/app/v1/search?filter={words}"), FIRST_PAGE_OF_CREED.to_string(), WEB_PAGE_OF_CREED.to_string()],
+            "{reference}"
+        );
         assert_eq!((b.brand.id.as_str(), b.perfumes.page), ("Creed", 1), "the slug is the one of the site, the first page is 1");
     }
 
@@ -171,9 +190,10 @@ async fn an_address_a_path_and_a_name_reach_the_brand_and_the_page_asked_is_pass
     for reference in ["goose creek", "Goose_Creek"] {
         c.get_brand(reference, 1).await.unwrap();
         let asked = site.take();
-        assert_eq!(asked.len(), 2, "{asked:?}");
+        // The fake answers the recorded brand under any number: its web page is the one read.
+        assert_eq!(asked.len(), 3, "{asked:?}");
         assert!(asked[0].eq_ignore_ascii_case("/app/v1/search?filter=goose+creek"), "{asked:?}");
-        assert_eq!(asked[1], "/app/v1/brand_details?b_id=15598&page=1&per_page=20&o=nr_desc&g_f=1&g_m=1&g_u=1");
+        assert_eq!(asked[1..], ["/app/v1/brand_details?b_id=15598&page=1&per_page=20&o=nr_desc&g_f=1&g_m=1&g_u=1", WEB_PAGE_OF_CREED]);
     }
 }
 
@@ -190,7 +210,10 @@ async fn digits_are_a_slug_or_a_name_like_any_other_and_never_the_number_of_a_br
     // On the web site `4711` is the slug of a brand: such a brand is read under the number
     // the search gives for it, not under the number its digits spell.
     c.get_brand("1234", 1).await.unwrap();
-    assert_eq!(site.take(), ["/app/v1/search?filter=1234", "/app/v1/brand_details?b_id=99&page=1&per_page=20&o=nr_desc&g_f=1&g_m=1&g_u=1"]);
+    assert_eq!(
+        site.take(),
+        ["/app/v1/search?filter=1234", "/app/v1/brand_details?b_id=99&page=1&per_page=20&o=nr_desc&g_f=1&g_m=1&g_u=1", WEB_PAGE_OF_CREED]
+    );
 }
 
 #[tokio::test]
@@ -222,13 +245,15 @@ async fn the_brand_of_a_reference_is_looked_up_once() {
     let first = c.get_brand("creed", 1).await.unwrap();
     c.get_brand("creed", 2).await.unwrap();
     let page = |n: u32| format!("/app/v1/brand_details?b_id=253&page={n}&per_page=20&o=nr_desc&g_f=1&g_m=1&g_u=1");
-    assert_eq!(site.take(), ["/app/v1/search?filter=creed".to_string(), page(1), page(2)]);
+    // Each page read through the interface is followed by the web page that shows the country.
+    let web = || WEB_PAGE_OF_CREED.to_string();
+    assert_eq!(site.take(), ["/app/v1/search?filter=creed".to_string(), page(1), web(), page(2), web()]);
 
     // The id and the address handed back are those of the site: they name the brand without a search.
     assert_eq!(first.brand.id, "Creed");
     c.get_brand(&first.brand.id, 3).await.unwrap();
     c.get_brand(&first.brand.url, 4).await.unwrap();
-    assert_eq!(site.take(), [page(3), page(4)]);
+    assert_eq!(site.take(), [page(3), web(), page(4), web()]);
 
     // What the search does not know is not asked of it twice either: the web site is read at once.
     for _ in 0..2 {
@@ -276,12 +301,14 @@ async fn an_answer_of_another_shape_is_reported_and_one_without_its_count_is_lef
     assert_eq!(c.get_brand("Creed", 1).await.unwrap_err(), ClientError::ParserOutdated("/app/v1/brand_details: no perfumes".into()));
 
     // A count the answer does not carry is not a count of zero, and the web page always
-    // tells how many perfumes a brand has: it is read (the fake has none to serve).
+    // tells how many perfumes a brand has: it answers the whole read (the fake serves the
+    // page of another brand there, Dior).
     let (c, site) = client_of(&no_count).await;
     c.app_login("someone@example.org", "pw").await.unwrap();
     site.take();
-    assert!(c.get_brand("Creed", 1).await.is_err());
-    assert_eq!(&site.take()[..3], ["/app/v1/search?filter=Creed", FIRST_PAGE_OF_CREED, "/Perfumes/Creed"]);
+    let b = c.get_brand("Creed", 1).await.unwrap();
+    assert_eq!(site.take(), ["/app/v1/search?filter=Creed", FIRST_PAGE_OF_CREED, WEB_PAGE_OF_CREED]);
+    assert_eq!((b.brand.id.as_str(), b.perfumes.total_items), ("Dior", Some(344)), "the brand and the count of the web page");
 }
 
 #[tokio::test]
@@ -317,8 +344,23 @@ async fn a_founding_year_is_kept_and_no_page_is_promised_beyond_a_thousand_rows(
 #[tokio::test]
 async fn without_a_session_of_the_application_only_the_web_site_is_asked() {
     let (c, site) = client_of(BRAND_DETAILS).await;
-    assert!(c.get_brand("Creed", 2).await.is_err());
-    let asked = site.asked();
-    assert_eq!(asked[0], "/Perfumes/Creed?current_page=2");
-    assert!(asked.iter().all(|a| !a.starts_with("/app/v1/")), "{asked:?}");
+    // The fake serves the page of another brand (Dior) as the web page of Creed.
+    let b = c.get_brand("Creed", 2).await.unwrap();
+    assert_eq!(b.brand.id, "Dior");
+    assert_eq!(site.asked(), ["/Perfumes/Creed?current_page=2"], "one web page, and nothing of the interface");
+}
+
+/// The country is read on the web page of the brand. When that page cannot be read, the
+/// brand of the interface is given all the same, and says what it lacks.
+#[tokio::test]
+async fn a_brand_whose_web_page_cannot_be_read_is_given_without_its_country_and_says_so() {
+    let details = BRAND_DETAILS.replace(r#""name_url": "Creed""#, r#""name_url": "Elsewhere""#);
+    assert_ne!(details, BRAND_DETAILS);
+    let (c, site) = client_of(&details).await;
+    c.app_login("someone@example.org", "pw").await.unwrap();
+    site.take();
+    let b = c.get_brand("Creed", 1).await.unwrap();
+    assert_eq!(site.take(), ["/app/v1/search?filter=Creed", FIRST_PAGE_OF_CREED, "/Perfumes/Elsewhere"]);
+    assert_eq!((b.brand.id.as_str(), b.country, b.perfumes.items.len()), ("Elsewhere", None, 5));
+    assert_eq!(b.warnings, ["country unavailable: not found: /Perfumes/Elsewhere"]);
 }

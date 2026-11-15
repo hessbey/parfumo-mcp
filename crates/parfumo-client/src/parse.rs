@@ -784,6 +784,7 @@ pub fn parse_brand_page(html: &str, requested_page: u32) -> PResult<BrandPage> {
         country: head.country,
         founded: head.founded,
         perfumes: listing_from(root, requested_page)?,
+        warnings: Vec::new(),
     })
 }
 
@@ -799,6 +800,7 @@ pub fn parse_perfumer_page(html: &str, requested_page: u32) -> PResult<PerfumerP
         perfumer: EntityRef { id, numeric_id: rx(re::PERFUMER_ID).captures(html).and_then(|c| c[1].parse().ok()), name: head.name, url: head.url },
         country: head.country,
         perfumes: listing_from(root, requested_page)?,
+        warnings: Vec::new(),
     })
 }
 

@@ -108,8 +108,10 @@ impl ParfumoClient {
         self.remember_brand(memo_key(false, &slug), Some(b_id));
         Ok(Some(BrandPage {
             brand: EntityRef { url: self.t.absolute(&format!("{}{slug}", routes::PERFUMES_PREFIX)), numeric_id: Some(b_id), name, id: slug },
-            // The interface names the country by a number only: the country stays absent.
+            // The interface names the country by a number only: the caller reads the name
+            // on the web page of the brand.
             country: None,
+            warnings: Vec::new(),
             founded: count(b, "founding_year").and_then(|y| u16::try_from(y).ok()),
             perfumes: Listing {
                 items: rows.iter().filter_map(|row| self.summary_from_index_row(row)).collect(),

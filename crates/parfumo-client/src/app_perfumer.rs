@@ -91,8 +91,10 @@ impl ParfumoClient {
         let Some(total) = matches(listing) else { return Ok(None) };
         Ok(Some(PerfumerPage {
             perfumer: EntityRef { url: self.t.absolute(&routes::perfumer(&slug)), id: slug, numeric_id, name },
-            // The interface names the country by a number only: the country stays absent.
+            // The interface names the country by a number only: the caller reads the name
+            // on the web page of the perfumer.
             country: None,
+            warnings: Vec::new(),
             perfumes: Listing {
                 items: rows.iter().filter_map(|row| self.summary_from_index_row(row)).collect(),
                 page,
