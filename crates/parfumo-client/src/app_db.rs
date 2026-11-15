@@ -284,6 +284,30 @@ impl ParfumoClient {
         remember(&mut known, MAX_PERFUMES, id.to_lowercase(), (p_id, id.to_string()));
     }
 
+    /// The address an answer gives today for a perfume already remembered: a number known
+    /// under another address takes this one. A number not met before is not added: these
+    /// rows come with the lookup of a brand, and what a lookup happens to list must not
+    /// change which calls a later read makes.
+    fn refresh_perfume(&self, id: &str, p_id: u64) {
+        let mut known = self.t.perfume_ids.lock().unwrap_or_else(|e| e.into_inner());
+        let dated = known.iter().find(|(_, (number, address))| *number == p_id && address != id).map(|(key, _)| key.clone());
+        if let Some(key) = dated {
+            known.remove(&key);
+            known.insert(id.to_lowercase(), (p_id, id.to_string()));
+        }
+    }
+
+    /// Refreshes the addresses of the perfumes an answer of `GET /search` lists
+    /// (`{p_id, b_name_url, p_name_url}` each): a perfume renamed on the site must not keep
+    /// its old address until one of its own listings is read again.
+    fn refresh_perfumes(&self, found: &Value) {
+        for row in found.get("perfumes").and_then(Value::as_array).into_iter().flatten() {
+            if let (Some(p_id), Some(brand_url), Some(name_url)) = (count(row, "p_id"), text(row, "b_name_url"), text(row, "p_name_url")) {
+                self.refresh_perfume(&format!("{brand_url}/{name_url}"), p_id);
+            }
+        }
+    }
+
     /// A read of the interface, or why it has no answer: an address it answers 404 to, or
     /// a refusal worded in JSON under status 200.
     async fn app_answer(&self, path: &str, params: &[(String, String)]) -> Result<Result<Value, Unserved>, ClientError> {
@@ -311,8 +335,27 @@ impl ParfumoClient {
     /// The brands the search of the application finds for a slug or a name (`GET /search`):
     /// `{b_id, b_name, b_name_url}` each. None when the search has nothing to say.
     pub(crate) async fn app_brands_like(&self, reference: &str) -> Result<Vec<Value>, ClientError> {
-        let found = self.app_read("/search", &[pair("filter", words(reference))]).await?;
-        Ok(found.as_ref().and_then(|f| f.get("brands")).and_then(Value::as_array).cloned().unwrap_or_default())
+        let Some(found) = self.app_read("/search", &[pair("filter", words(reference))]).await? else { return Ok(Vec::new()) };
+        self.refresh_perfumes(&found);
+        Ok(found.get("brands").and_then(Value::as_array).cloned().unwrap_or_default())
+    }
+
+    /// Among the rows of a listing, the number of the perfume that bears an id, without
+    /// regard to case. Reading the rows records their numbers, but the number looked for
+    /// is taken from its row: the memory is emptied when it is full, which may happen
+    /// between the row and the end of the listing.
+    fn perfume_among(&self, rows: &[Value], id: &str) -> Option<u64> {
+        let wanted = id.to_lowercase();
+        let mut found = None;
+        for row in rows {
+            self.summary_from_index_row(row);
+            if let (Some(brand_url), Some(name_url)) = (text(row, "b_name_url"), text(row, "p_name_url"))
+                && format!("{brand_url}/{name_url}").to_lowercase() == wanted
+            {
+                found = found.or(count(row, "p_id"));
+            }
+        }
+        found
     }
 
     /// The number of a perfume from a reference: a number, a Parfumo URL or a
@@ -342,11 +385,7 @@ impl ParfumoClient {
             pair("g_u", 1),
         ];
         let Some(listing) = self.app_read("/perfumes", &params).await? else { return Ok(None) };
-        // Reading the rows records their numbers.
-        for row in listing.get("rows").and_then(Value::as_array).into_iter().flatten() {
-            self.summary_from_index_row(row);
-        }
-        Ok(known(self))
+        Ok(self.perfume_among(listing.get("rows").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default(), &id))
     }
 
     /// The number of a perfume from a reference, for a read that decides by itself what a
@@ -549,6 +588,7 @@ impl ParfumoClient {
     async fn app_brand_id(&self, name: &str) -> Result<Option<u64>, ClientError> {
         let name = name.trim();
         let Some(found) = self.app_read("/search", &[pair("filter", name)]).await? else { return Ok(None) };
+        self.refresh_perfumes(&found);
         let brands = found.get("brands").and_then(Value::as_array).cloned().unwrap_or_default();
         let same = |b: &&Value| text(b, "b_name").is_some_and(|n| n.to_lowercase() == name.to_lowercase());
         let hit = brands.iter().find(same).or(if brands.len() == 1 { brands.first() } else { None });
@@ -656,6 +696,40 @@ mod tests {
         assert_eq!((memory.len(), memory[&1]), (3, 10), "a key already there takes no room");
         remember(&mut memory, 3, 4, 4);
         assert_eq!(memory.into_iter().collect::<Vec<_>>(), [(4, 4)]);
+    }
+
+    #[test]
+    fn the_perfume_looked_for_is_found_in_its_listing_even_when_the_listing_empties_the_memory() {
+        let c = client();
+        let listing: Value = serde_json::from_str(include_str!("../tests/fixtures/app_perfumes_brand.json")).unwrap();
+        let rows = listing["rows"].as_array().unwrap();
+        assert_eq!((&rows[2]["p_name_url"], rows.len()), (&json!("absolu-aventus"), 5));
+        // Room for the rows up to the one looked for, the third: the fourth empties the memory.
+        for p_id in 1..=(MAX_PERFUMES as u64 - 3) {
+            c.remember_perfume(&format!("Brand/perfume-{p_id}"), 1_000_000 + p_id);
+        }
+        assert_eq!(c.perfume_among(rows, "creed/Absolu-Aventus"), Some(225233));
+        let known = c.t.perfume_ids.lock().unwrap();
+        assert!(!known.contains_key("creed/absolu-aventus") && known.len() == 2, "the memory was emptied after that row: {}", known.len());
+        drop(known);
+        assert_eq!(c.perfume_among(rows, "Creed/no-such-perfume"), None);
+    }
+
+    #[test]
+    fn the_search_refreshes_the_address_of_a_perfume_met_before_and_adds_none() {
+        let c = client();
+        let search: Value = serde_json::from_str(include_str!("../tests/fixtures/app_search_creed.json")).unwrap();
+        // The recorded search lists three perfumes of Creed, Aventus (9438) as Creed/aventus.
+        assert_eq!(search["perfumes"].as_array().unwrap().len(), 3);
+        c.refresh_perfumes(&search);
+        assert!(remembered(&c).is_empty(), "a perfume no read met is not remembered from the search");
+
+        c.remember_perfume("Creed/Aventus_Old", 9438);
+        c.remember_perfume("Creed/absolu-aventus", 225233);
+        c.refresh_perfumes(&search);
+        assert_eq!(remembered(&c), [(9438, "Creed/aventus".to_string()), (225233, "Creed/absolu-aventus".to_string())]);
+        let known = c.t.perfume_ids.lock().unwrap();
+        assert!(known.contains_key("creed/aventus") && !known.contains_key("creed/aventus_old"), "the old address names nothing any more");
     }
 
     #[test]

@@ -705,6 +705,80 @@ async fn a_refusal_that_does_not_say_not_found_is_not_a_perfume_that_does_not_ex
     assert!(c.has_app_session(), "none of this is a refusal of the session");
 }
 
+#[tokio::test]
+async fn a_perfume_found_while_the_memory_of_numbers_overflows_is_still_found() {
+    let (c, site) = logged_in().await;
+    // The memory holds 5000 perfumes (MAX_PERFUMES in app_db.rs) and is emptied when one
+    // more comes. Filled so that the listing of the lookup overflows it one row after the
+    // perfume looked for (the third of the recorded listing): what the listing says of
+    // that perfume must not be lost with the memory.
+    let recorded: Value = serde_json::from_str(PERFUMES_BRAND).unwrap();
+    let rows: Vec<Value> = (0..4_997)
+        .map(|n| {
+            let mut row = recorded["rows"][0].clone();
+            row["p_id"] = (1_000_000 + n).to_string().into();
+            row["p_name_url"] = format!("perfume-{n}").into();
+            row
+        })
+        .collect();
+    *site.perfumes.lock().unwrap() = Some(json!({"matches": rows.len(), "rows": rows}).to_string());
+    c.search_perfumes(&by_year(2020), 1).await.unwrap();
+    *site.perfumes.lock().unwrap() = None;
+    site.take();
+
+    let p = c.get_perfume("Creed/absolu-aventus").await.unwrap();
+    assert_eq!(
+        site.take(),
+        [
+            "/app/v1/search?filter=Creed",
+            "/app/v1/perfumes?page=1&per_page=20&filter=absolu+aventus&b_id=253&g_f=1&g_m=1&g_u=1",
+            "/app/v1/perfume_details/225233"
+        ],
+        "the record is read from the interface, which found the perfume"
+    );
+    assert_eq!(p.p_id, Some(225233));
+}
+
+#[tokio::test]
+async fn the_address_of_a_remembered_perfume_is_refreshed_from_the_answers_of_the_brand_search() {
+    // Aventus met in a listing under an address it no longer has: the recorded listing with
+    // its first row given the number of Aventus and another slug.
+    let dated = || {
+        let mut listing: Value = serde_json::from_str(PERFUMES_BRAND).unwrap();
+        listing["rows"][0]["p_id"] = "9438".into();
+        listing["rows"][0]["p_name_url"] = "Aventus_Old".into();
+        listing.to_string()
+    };
+    // The two reads of `GET /search`, whose recorded answer lists Aventus as Creed/aventus:
+    // the brand of a search, and the brand of a perfume looked up by its id.
+    for through_a_search in [true, false] {
+        let (c, site) = logged_in().await;
+        *site.perfumes.lock().unwrap() = Some(dated());
+        c.search_perfumes(&by_year(2010), 1).await.unwrap();
+        *site.perfumes.lock().unwrap() = None;
+        site.take();
+
+        if through_a_search {
+            c.search_perfumes(&by_brand("creed"), 1).await.unwrap();
+        } else {
+            let _ = c.get_perfume("Creed/no-such-perfume").await;
+        }
+        assert_eq!(site.take()[0], format!("/app/v1/search?filter={}", if through_a_search { "creed" } else { "Creed" }));
+        // The old address names nothing any more: it is looked up like any other.
+        let _ = c.get_perfume("Creed/Aventus_Old").await;
+        assert_eq!(site.take()[0], "/app/v1/search?filter=Creed");
+        c.get_perfume("Creed/aventus").await.unwrap();
+        assert_eq!(site.take(), ["/app/v1/perfume_details/9438"], "known under its address of today, without a lookup");
+
+        // What the search lists and no read met is not remembered: it is looked up.
+        let listed: Value = serde_json::from_str(SEARCH_CREED).unwrap();
+        let other = listed["perfumes"].as_array().unwrap().iter().find(|row| row["p_id"] != "9438").expect("another perfume in the recorded search");
+        let id = format!("{}/{}", other["b_name_url"].as_str().unwrap(), other["p_name_url"].as_str().unwrap());
+        let _ = c.get_perfume(&id).await;
+        assert!(site.take()[0].starts_with("/app/v1/search?filter="), "{id} is not known from the search");
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Reviews and statements: always the web site
 // ---------------------------------------------------------------------------
