@@ -1086,6 +1086,93 @@ async fn a_new_login_to_the_web_site_does_not_store_a_token_another_process_repl
     assert_eq!(logins(site), (2, 2));
 }
 
+/// One process has a login to the interface under way, and meanwhile finds that the stored
+/// session changed and holds no token. The login answers at the very instant the stored
+/// session is taken: after the row was read, before it is decided what becomes of the token
+/// held. That token is the one just obtained, which no process stored yet.
+///
+/// The stored session is taken either when a call ends and stores what it met
+/// (`as_a_call_ends`), or when a call starts and follows the link.
+async fn a_login_answers_as_the_stored_session_is_taken(as_a_call_ends: bool) {
+    let w = World::new().await;
+    let site = w.site.clone();
+    let (a, b) = two_processes(&w).await;
+    let a = std::sync::Arc::new(a);
+    let sessions = &a.state.sessions;
+
+    // The site ends the session, and a call of the process meets the refusal.
+    site.app_live.lock().unwrap().clear();
+    if as_a_call_ends {
+        // That call is not over: the refusal is not stored yet.
+        assert_eq!(sessions.client_for(w.user).unwrap().app_nick().await.unwrap_err(), ClientError::LoginRequired);
+    } else {
+        assert_eq!(a.search().await, FROM_THE_WEB);
+    }
+    // Its next call logs in again, to an interface slow to answer.
+    site.app_delay_ms.store(500, Ordering::SeqCst);
+    let renewing = tokio::spawn({
+        let a = a.clone();
+        async move { a.state.sessions.open_app_session(a.user.id).await }
+    });
+    while !site.app_seen.lock().unwrap().contains(&login()) {
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    site.app_delay_ms.store(0, Ordering::SeqCst);
+    // While that login is under way the stored session changes, and holds no token.
+    if as_a_call_ends {
+        // The other process meets the refusal of the old token too, and stores it.
+        assert_eq!(b.state.sessions.client_for(w.user).unwrap().app_nick().await.unwrap_err(), ClientError::LoginRequired);
+        b.state.sessions.store_app_session(w.user);
+    } else {
+        // The end of the session is stored once more as it is: its `app_rev` moves on.
+        // (Two processes of this version do not do that: it takes a third one, whose own
+        // renewed session was ended in its turn.)
+        let link = w.link();
+        assert!(w.db.link_store_app_session(w.user, &link.rev, link.app_rev, &link.cookies.unwrap(), true).unwrap());
+    }
+    assert!(w.link().app_ended && !a.holds_session());
+
+    // The process takes the stored session, and its login answers at that very instant.
+    let answered = a.clone();
+    sessions.as_the_stored_session_is_taken(move || {
+        let patience = std::time::Instant::now() + Duration::from_secs(10);
+        while !answered.holds_session() && std::time::Instant::now() < patience {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    });
+    // On a thread of its own: the wait above holds the thread it is made on, and a thread
+    // of the runtime held that way can be the one the answer of the login has to come by.
+    let taking = {
+        let (a, runtime) = (a.clone(), tokio::runtime::Handle::current());
+        tokio::task::spawn_blocking(move || {
+            let sessions = &a.state.sessions;
+            if as_a_call_ends { sessions.store_app_session(a.user.id) } else { runtime.block_on(sessions.open_app_session(a.user.id)) }
+        })
+    };
+    taking.await.unwrap();
+    renewing.await.unwrap();
+    asked(&site);
+
+    // The token is kept and stored: it serves this process, the other one and the next,
+    // and the renewal is not taken for one that was lost (no pause, no other login).
+    assert!(a.holds_session(), "the token of a login that answered while the stored session was taken was thrown away");
+    assert_eq!(a.search().await, FROM_THE_INTERFACE);
+    assert_eq!(b.search().await, FROM_THE_INTERFACE);
+    assert_eq!(w.start().search().await, FROM_THE_INTERFACE);
+    assert_eq!(asked(&site).1, vec![call("/perfumes", "app-alice-2"); 3]);
+    assert_eq!(logins(&site), (1, 2));
+}
+
+#[test]
+fn a_login_that_answers_as_a_call_ends_and_takes_the_stored_session_keeps_its_token() {
+    on_four_threads(Duration::from_secs(60), a_login_answers_as_the_stored_session_is_taken(true));
+}
+
+#[test]
+fn a_login_that_answers_as_a_call_follows_the_link_and_takes_the_stored_session_keeps_its_token() {
+    on_four_threads(Duration::from_secs(60), a_login_answers_as_the_stored_session_is_taken(false));
+}
+
 /// Runs `test` on a runtime of four threads, and fails when it has not ended after `limit`.
 ///
 /// The runtime is built here, and the time is counted on the thread of the test, not by the

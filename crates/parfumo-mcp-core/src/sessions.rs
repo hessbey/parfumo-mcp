@@ -159,6 +159,11 @@ pub struct Sessions {
     /// instant cannot be arranged from outside.
     #[cfg(test)]
     as_the_app_login_leaves: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// Tests only: run once while a session stored by another process is taken, after the
+    /// row was read and before it is decided what becomes of the token held. A login that
+    /// answers at that very instant cannot be arranged from outside.
+    #[cfg(test)]
+    as_the_stored_session_is_taken: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
 fn aad(user_id: i64, kind: &str) -> String {
@@ -186,6 +191,8 @@ impl Sessions {
             app_revs: Mutex::new(HashMap::new()),
             #[cfg(test)]
             as_the_app_login_leaves: Mutex::new(None),
+            #[cfg(test)]
+            as_the_stored_session_is_taken: Mutex::new(None),
         }
     }
 
@@ -236,19 +243,13 @@ impl Sessions {
             self.drop_link_state(user_id);
         } else if let Some(link) = &mut link {
             let seen = self.app_revs().get(&user_id).copied();
-            if seen.is_some_and(|seen| seen != link.app_rev) {
-                // Asked without taking the mark away: storing the session is not done here.
-                let limiter = self.limiter(user_id);
-                let unsaved = limiter.take_app_session_change();
-                if unsaved {
-                    limiter.flag_app_session_change();
-                }
-                if let Err(e) = self.adopt_app_session(user_id, link, unsaved) {
-                    // What is stored could not be taken. The token held may be one the
-                    // other process saw refused: it is not kept to be sent in its place.
-                    limiter.forget_app_session();
-                    return Err(e);
-                }
+            if seen.is_some_and(|seen| seen != link.app_rev)
+                && let Err(e) = self.adopt_app_session(user_id, link, false)
+            {
+                // What is stored could not be taken. The token held may be one the other
+                // process saw refused: it is not kept to be sent in its place.
+                self.limiter(user_id).forget_app_session();
+                return Err(e);
             }
         }
         Ok(link)
@@ -269,14 +270,17 @@ impl Sessions {
     ///   refuse. Such a token must not stay in the database for the next process either:
     ///   the refusal is stored in its place (`link` then says so).
     /// - No token is stored: the site ended the session, as far as the other process knew.
-    ///   The token held is the one it ended, and is forgotten; unless (`unsaved`) this
-    ///   process obtained it by a login it has not stored yet, which the other process
-    ///   knows nothing of. It is then kept (`true` is returned), and storing it erases
-    ///   nothing. A process that holds no token forgets nothing: a login it has under way
-    ///   keeps its outcome.
+    ///   The token held is the one it ended, and is forgotten; unless this process obtained
+    ///   it by a login it has not stored yet, which the other process knows nothing of. It
+    ///   is then kept (`true` is returned), and storing it erases nothing. A process that
+    ///   holds no token forgets nothing: a login it has under way keeps its outcome.
+    ///
+    /// A token not stored yet is known by the mark of a change of the session. `mark_taken`
+    /// tells that the caller took that mark away, to store the session: a token is then
+    /// held unsaved whether the mark is found or not.
     ///
     /// Called with the lock of `link_revs` held, for the link this process follows.
-    fn adopt_app_session(&self, user_id: i64, link: &mut crate::db::LinkRow, unsaved: bool) -> Result<bool, SessionError> {
+    fn adopt_app_session(&self, user_id: i64, link: &mut crate::db::LinkRow, mark_taken: bool) -> Result<bool, SessionError> {
         let limiter = self.limiter(user_id);
         let cookies = link.cookies.as_deref().map(|blob| self.stored_cookies(user_id, blob)).transpose()?.unwrap_or_default();
         // The token is one of the stored cookies, which only a client tells from the others.
@@ -286,6 +290,13 @@ impl Sessions {
         let stored = self.client_on(UserLimiter::new())?;
         stored.import_cookies(&cookies);
         let shared = self.client_on(limiter.clone())?;
+        #[cfg(test)]
+        {
+            let hook = self.as_the_stored_session_is_taken.lock().unwrap().take();
+            if let Some(hook) = hook {
+                hook();
+            }
+        }
         let mut kept = false;
         if stored.has_app_session() {
             limiter.forget_app_session();
@@ -302,6 +313,18 @@ impl Sessions {
                 }
             }
         } else if shared.has_app_session() {
+            // Whether the token is one not stored yet is asked now that it is seen, not
+            // before the row was read and the clients built: a login under way may answer
+            // at any instant until then, and its token is not the one the other process
+            // saw end. The mark is asked for without being taken away: nothing is stored
+            // here. Nothing else takes it meanwhile (that is done under the lock held).
+            let unsaved = mark_taken || {
+                let marked = limiter.take_app_session_change();
+                if marked {
+                    limiter.flag_app_session_change();
+                }
+                marked
+            };
             if unsaved {
                 kept = true;
             } else {
@@ -826,7 +849,9 @@ impl Sessions {
             // Nothing was written. Either the link is no longer the user's, and nothing is
             // to be; or another process stored a session since this one last looked.
             let Some(mut link) = self.db.link_get(user_id).map_err(internal)?.filter(|link| link.rev == *rev) else { return Ok(()) };
-            if self.adopt_app_session(user_id, &mut link, account.has_app_session())? && !write(link.app_rev)? {
+            // The mark was taken above: a token held by now, or obtained while the stored
+            // session is taken, is one this process has not stored.
+            if self.adopt_app_session(user_id, &mut link, true)? && !write(link.app_rev)? {
                 return Err(internal("the stored session changed again"));
             }
             Ok(())
@@ -850,6 +875,13 @@ impl Sessions {
     #[cfg(test)]
     pub(crate) fn as_the_app_login_leaves(&self, hook: impl FnOnce() + Send + 'static) {
         *self.as_the_app_login_leaves.lock().unwrap() = Some(Box::new(hook));
+    }
+
+    /// What `hook` does happens the next time a session stored by another process is taken:
+    /// after the row was read, before it is decided what becomes of the token held.
+    #[cfg(test)]
+    pub(crate) fn as_the_stored_session_is_taken(&self, hook: impl FnOnce() + Send + 'static) {
+        *self.as_the_stored_session_is_taken.lock().unwrap() = Some(Box::new(hook));
     }
 
     /// Ends the pauses of the login to the application interface: the one that follows a
