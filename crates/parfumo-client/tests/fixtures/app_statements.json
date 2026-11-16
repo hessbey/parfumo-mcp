@@ -1,0 +1,88 @@
+{
+ "statements": [
+  {
+   "voting": "8.0",
+   "voting_r": 8,
+   "awards": "1",
+   "replies": 0,
+   "statement_id": "2800121",
+   "user_id": 1,
+   "awarded": 0,
+   "photo": "https://media.parfumo.com/user_photo/placeholder.jpg",
+   "nick_name": "member1",
+   "gender": "m",
+   "date": "5 days ago",
+   "statement_text": "Statement 1, one line.<br />\nAnother line."
+  },
+  {
+   "voting": "10",
+   "voting_r": 10,
+   "awards": "1",
+   "replies": 0,
+   "statement_id": "2798687",
+   "user_id": 2,
+   "awarded": 0,
+   "photo": "https://media.parfumo.com/user_photo/placeholder.jpg",
+   "nick_name": "member2",
+   "gender": "m",
+   "date": "7 days ago",
+   "statement_text": "Statement 2, one line.<br />\nAnother line."
+  },
+  {
+   "voting": "9.0",
+   "voting_r": 9,
+   "awards": "0",
+   "replies": 0,
+   "statement_id": "2796568",
+   "user_id": 3,
+   "awarded": 0,
+   "photo": "https://media.parfumo.com/user_photo/placeholder.jpg",
+   "nick_name": "member3",
+   "gender": "m",
+   "date": "9 days ago",
+   "statement_text": "Statement 3, one line.<br />\nAnother line."
+  },
+  {
+   "voting": "8.5",
+   "voting_r": 8,
+   "awards": "0",
+   "replies": 0,
+   "statement_id": "2792657",
+   "user_id": 4,
+   "awarded": 0,
+   "photo": "https://media.parfumo.com/user_photo/placeholder.jpg",
+   "nick_name": "member4",
+   "gender": "m",
+   "date": "14 days ago",
+   "statement_text": "Statement 4, one line.<br />\nAnother line."
+  },
+  {
+   "voting": "",
+   "voting_r": "",
+   "awards": "1",
+   "replies": 0,
+   "statement_id": "2791166",
+   "user_id": 5,
+   "awarded": 0,
+   "photo": "https://media.parfumo.com/user_photo/placeholder.jpg",
+   "nick_name": "member5",
+   "gender": "m",
+   "date": "16 days ago",
+   "statement_text": "Statement 5, one line.<br />\nAnother line."
+  },
+  {
+   "voting": "7.5",
+   "voting_r": 7,
+   "awards": "0",
+   "replies": 0,
+   "statement_id": "2789637",
+   "user_id": 6,
+   "awarded": 0,
+   "photo": "https://media.parfumo.com/user_photo/placeholder.jpg",
+   "nick_name": "member6",
+   "gender": "m",
+   "date": "17 days ago",
+   "statement_text": "Statement 6, one line.<br />\nAnother line."
+  }
+ ]
+}

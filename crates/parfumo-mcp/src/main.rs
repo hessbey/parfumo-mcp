@@ -4,7 +4,7 @@
 //! no OAuth, no users. The single Parfumo account is linked on a login page that the
 //! binary opens on 127.0.0.1 when it is needed (`login`), or read from the environment
 //! (`PARFUMO_USER` + `PARFUMO_PASSWORD`, or `PARFUMO_COOKIE`); without one, the public
-//! tools still work. Cache, session cookies, audit log and daily counts live in a local
+//! tools still work. Session cookies, audit log and daily counts live in a local
 //! SQLite file.
 //!
 //! Standard output carries the MCP protocol and nothing else: logs go to standard error.

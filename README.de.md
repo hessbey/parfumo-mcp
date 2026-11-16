@@ -15,7 +15,8 @@ Parfumdatenbank, deine Sammlung, deine getragenen Düfte, deine Bewertungen und 
 auf die Community (Nachrichten, Forum, Blogs, Souk).
 
 > **Inoffiziell.** Dieses Projekt steht in keiner Verbindung zu Parfumo und wird von Parfumo
-> nicht unterstützt. Es liest dieselben Seiten wie ein Browser, mit einer Anfrage pro
+> nicht unterstützt. Es liest dieselben Seiten wie ein Browser und, bei einem mit Passwort
+> verknüpften Konto, die Schnittstelle der Parfumo-App, mit einer Anfrage pro
 > Sekunde. Automatisierter Zugriff kann trotzdem dazu führen, dass Parfumo das verknüpfte
 > Konto sperrt – die Nutzung erfolgt auf eigene Gefahr.
 
@@ -38,6 +39,14 @@ auf die Community (Nachrichten, Forum, Blogs, Souk).
   zeigt, was tatsächlich in dein Konto geschrieben wurde.
 - **Immer aktuell.** Jede Abfrage geht an Parfumo: Keine Seite wird aufbewahrt, um später
   erneut ausgeliefert zu werden.
+- **Ausführlichere Antworten mit einem per Passwort verknüpften Konto.** Ist dein
+  Parfumo-Konto mit Benutzername oder E-Mail und Passwort verknüpft, läuft ein Teil der
+  Datenbankabfragen (Suche, Parfum, Marke, Parfümeur, Erscheinungsjahr, ähnliche Parfums)
+  über die Schnittstelle, die Parfumos eigene App verwendet. Suchergebnisse enthalten dann
+  zu jedem Parfum die Bewertung und die Anzahl der Bewertungen, und eine Suche nach Name,
+  Marke oder Jahr ist nicht mehr auf 1000 Treffer begrenzt. Sonst ändert sich nichts: Mit
+  einem per Browser-Cookie verknüpften Konto oder ohne Konto funktioniert weiterhin alles
+  über die Webseiten.
 - **Vorsichtig gegenüber der Website.** Eine Anfrage pro Sekunde und Nutzer, zufällige
   Verzögerung, ein fester und ehrlicher `User-Agent`. Kein Lösen von Captchas, kein Umgehen
   von Cloudflare.
@@ -117,7 +126,7 @@ Die Anleitungen sind auf Englisch, die ausführlichen Referenzen auf Französisc
 ```
 crates/parfumo-client      Bibliothek: Zugriff auf die Website. Transport, Routen und
                            Selektoren (ein einziges Modul, src/site.rs), HTML-Auswertung,
-                           Modelle
+                           Schnittstelle der Parfumo-App (src/app*.rs), Modelle
 crates/parfumo-mcp-core    Bibliothek: die 48 Tools, Parfumo-Sitzung, Speicher, Audit-Protokoll
 crates/parfumo-mcp         lokales Programm: die Tools über stdio
 crates/parfumo-mcp-server  gehostetes Programm: die Tools über HTTP, mit OAuth, Nutzern, Canary
@@ -128,6 +137,11 @@ Parfumo wird serverseitig gerendert und hat keine öffentliche API, deshalb wert
 HTML aus. Alle Routen und Selektoren liegen in einem einzigen Modul, die Parser werden gegen
 aufgezeichnete Fixtures getestet, und ein täglicher, rein lesender Canary-Test auf dem
 gehosteten Server meldet jede Seite, deren Struktur sich geändert hat.
+Seit Version 0.3.0 läuft ein Teil der Datenbankabfragen eines mit Passwort verknüpften Kontos
+über die JSON-Schnittstelle der Parfumo-App, mit der eigenen Sitzung dieses Mitglieds und
+sonst nichts; alles andere beantworten die Webseiten, und alles, wenn diese Schnittstelle es
+nicht kann. Sie ist in [App-Schnittstelle](docs/APP_API.md) (auf Englisch) beschrieben; der
+Canary-Test prüft sie, wenn sein Testkonto auf diese Weise verknüpft ist.
 
 ## Entwicklung
 

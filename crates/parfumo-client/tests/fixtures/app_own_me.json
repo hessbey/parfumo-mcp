@@ -1,0 +1,9 @@
+{
+ "status": "success",
+ "user": {
+  "id": "1",
+  "nick_name": "testuser",
+  "email": "someone@example.org",
+  "photo": "https://media.parfumo.com/user_photo/placeholder.jpg"
+ }
+}

@@ -10,18 +10,22 @@ to other members — locked and capped, see [Configuration](CONFIGURATION.md#pub
 
 ## Database — no account needed
 
+**App**: with an account linked in credentials mode, the tool reads through the interface
+of Parfumo's own application (see [Conventions](#conventions)); otherwise, and for the
+other tools, it reads the web pages.
+
 | Tool | Purpose | Kind |
 | --- | --- | --- |
-| `parfumo_search_perfumes` | Search by text and filters | R |
-| `parfumo_get_perfume` | Full perfume page | R |
+| `parfumo_search_perfumes` | Search by text and filters. **App**, unless a perfumer, notes or a range of years is given: rating, number of ratings and of reviews, and `p_id` on each result; no cap at 1,000 results | R |
+| `parfumo_get_perfume` | Full perfume page. **App**: numeric ids of the brand and the perfumers; the rank label is read on the web page; a bare perfume number is accepted | R |
 | `parfumo_get_perfume_reviews` | Long reviews, paginated and sortable | R |
 | `parfumo_get_perfume_statements` | Short reviews (statements) | R |
-| `parfumo_get_similar_perfumes` | Similar perfumes, layering suggestions, reported dupes | R |
-| `parfumo_get_brand` | A brand and its perfumes | R |
-| `parfumo_get_perfumer` | A perfumer and their creations | R |
+| `parfumo_get_similar_perfumes` | Similar perfumes, layering suggestions, reported dupes. **App** for the first two lists; the dupes stay a web page | R |
+| `parfumo_get_brand` | A brand and its perfumes. **App**: the country is read on the web page; optional `warnings` | R |
+| `parfumo_get_perfumer` | A perfumer and their creations. **App** when the number of the perfumer is known; the country is read on the web page; optional `warnings` | R |
 | `parfumo_get_note` | A fragrance note and the perfumes that use it | R |
-| `parfumo_get_rankings` | Rankings by gender, new releases, trends, by year | R |
-| `parfumo_fetch_page` | Fallback: cleaned text of a Parfumo page (GET, Parfumo domain only) | R |
+| `parfumo_get_rankings` | Rankings by gender, new releases, trends, by year. **App** for the release-year listing only | R |
+| `parfumo_fetch_page` | Fallback: cleaned text of a Parfumo page (GET, Parfumo domain only). Refuses internal addresses, among them everything under `/app/` | R |
 
 ## Collection
 
@@ -98,6 +102,19 @@ to other members — locked and capped, see [Configuration](CONFIGURATION.md#pub
 - **Third-party content.** Text written by members is placed under
   `untrusted_member_content` and flagged as untrusted, so an assistant does not take it for
   instructions.
+- **Two ways of reading.** Parfumo is read through its web pages. From version 0.3.0, when
+  the user's account is linked in credentials mode (nickname or e-mail, and password), part
+  of the database reads go through the JSON interface of Parfumo's own application, with
+  that member's session token: search, perfume record, brand, perfumer, release-year
+  listing, similar perfumes. Everything else is read on the web pages, and so is everything
+  when no account is linked, when it is linked by a browser cookie, or when the interface
+  cannot answer as completely as the web site. Same tools, same parameters, same output
+  schemas. What a caller can see: listings read through the interface carry `p_id`,
+  `rating`, `rating_count` and `reviews_count` for each perfume and give the full name
+  ("Sauvage (Eau de Toilette)") without a separate `concentration`; records carry numeric
+  ids for the brand and the perfumers; what only the web page shows (rank label, country)
+  is read there, and a `warnings` entry says so when that page cannot be read. Details in
+  [TOOLS.md](TOOLS.md) and in [Application interface](APP_API.md).
 
 ## Errors
 

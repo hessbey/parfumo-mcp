@@ -7,7 +7,7 @@ use std::{
     collections::{BTreeMap, HashMap},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicU32, Ordering},
+        atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
     },
 };
 
@@ -68,7 +68,45 @@ pub struct Site {
     pub writes: Arc<Mutex<Vec<(String, String, String)>>>,
     /// Every request: (path, cookie header).
     pub seen: Arc<Mutex<Vec<(String, String)>>>,
+    /// Application interface (`/app/v1`): live session tokens → username.
+    pub app_live: Arc<Mutex<HashMap<String, String>>>,
+    pub app_logins: Arc<AtomicU32>,
+    /// When set, the application interface refuses every login.
+    pub app_login_refused: Arc<AtomicBool>,
+    /// Every call of the application interface made with a live token: (username, path).
+    pub app_calls: Arc<Mutex<Vec<(String, String)>>>,
+    /// Every request received under `/app/v1`, whatever was answered: (path, token sent).
+    /// The token is empty when the request carried none, as the login does.
+    pub app_seen: Arc<Mutex<Vec<(String, String)>>>,
+    /// When set, the login of the application interface answers 503: an outage, which says
+    /// nothing of the credentials.
+    pub app_login_unavailable: Arc<AtomicBool>,
+    /// When set, the login of the application interface answers 403, whatever the
+    /// credentials: an answer that does not say they are wrong.
+    pub app_login_forbidden: Arc<AtomicBool>,
+    /// When set, the application interface refuses every token, also one it just issued.
+    pub app_tokens_refused: Arc<AtomicBool>,
+    /// When set, the site blocks the address: every request of the application interface
+    /// is answered by the block page.
+    pub app_blocked: Arc<AtomicBool>,
+    /// When set, the block covers the pages of the web site too.
+    pub web_blocked: Arc<AtomicBool>,
+    /// When set, the login of the web site answers 503.
+    pub login_unavailable: Arc<AtomicBool>,
+    /// Milliseconds an answer of the application interface, or of the web site, is held
+    /// back. The answer is decided when the request arrives, as on a site slow to reply.
+    pub app_delay_ms: Arc<AtomicU64>,
+    pub web_delay_ms: Arc<AtomicU64>,
 }
+
+/// The page by which the site tells that it blocks an address. The page itself was never
+/// recorded: this is what docs/APP_API.md quotes of it (status 404, an HTML page).
+/// A page or an answer recorded on the real site, from the fixtures of the client.
+fn recorded(name: &str) -> String {
+    std::fs::read_to_string(format!("{}/../parfumo-client/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap()
+}
+
+pub const BLOCK_PAGE: &str = "<html><head><title>Access Denied</title></head><body><h1>Access Denied</h1><p>try again in 5 minutes</p></body></html>";
 
 impl Site {
     pub fn writes_to(&self, path: &str) -> usize {
@@ -183,18 +221,79 @@ fn redirect(to: &str) -> Response {
 }
 
 async fn handler(State(site): State<Site>, method: Method, uri: Uri, headers: HeaderMap, body: axum::body::Bytes) -> Response {
+    let delay = if uri.path().starts_with("/app/v1") { &site.app_delay_ms } else { &site.web_delay_ms }.load(Ordering::SeqCst);
+    let answer = answer(&site, method, uri, headers, body);
+    if delay > 0 {
+        tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+    }
+    answer
+}
+
+fn answer(site: &Site, method: Method, uri: Uri, headers: HeaderMap, body: axum::body::Bytes) -> Response {
     let path = uri.path().to_string();
     let cookie = headers.get(header::COOKIE).and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
     site.seen.lock().unwrap().push((path.clone(), cookie.clone()));
     let form: HashMap<String, String> = url::form_urlencoded::parse(&body).into_owned().collect();
     let f = |k: &str| form.get(k).cloned().unwrap_or_default();
     let n = |k: &str| form.get(k).and_then(|v| v.parse::<u64>().ok()).unwrap_or(0);
+    let block_page = || (StatusCode::NOT_FOUND, Html(BLOCK_PAGE)).into_response();
 
+    if let Some(call) = path.strip_prefix("/app/v1") {
+        let json = |status: StatusCode, text: String| (status, [(header::CONTENT_TYPE, "application/json")], text).into_response();
+        let bearer = headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("Bearer ")).unwrap_or("");
+        site.app_seen.lock().unwrap().push((call.to_string(), bearer.to_string()));
+        if site.app_blocked.load(Ordering::SeqCst) {
+            return block_page();
+        }
+        if call == "/auth/login" {
+            let count = site.app_logins.fetch_add(1, Ordering::SeqCst) + 1;
+            if site.app_login_unavailable.load(Ordering::SeqCst) {
+                return json(StatusCode::SERVICE_UNAVAILABLE, "{\"error\":\"Service unavailable\"}".into());
+            }
+            if site.app_login_forbidden.load(Ordering::SeqCst) {
+                return json(StatusCode::FORBIDDEN, "{\"error\":\"Forbidden\"}".into());
+            }
+            let user = f("email");
+            let known = site.accounts.lock().unwrap().contains_key(&user);
+            if site.app_login_refused.load(Ordering::SeqCst) || !known || f("password") != format!("pw-{user}") || f("device_id").is_empty() {
+                return json(StatusCode::UNAUTHORIZED, "{\"status\":\"error\",\"message\":\"Invalid credentials\"}".into());
+            }
+            let token = format!("app-{user}-{count}");
+            site.app_live.lock().unwrap().insert(token.clone(), user.clone());
+            return json(StatusCode::OK, format!("{{\"status\":\"success\",\"auth_token\":\"{token}\",\"nick_name\":\"{user}\"}}"));
+        }
+        let user = site.app_live.lock().unwrap().get(bearer).cloned().filter(|_| !site.app_tokens_refused.load(Ordering::SeqCst));
+        let Some(user) = user else {
+            return json(StatusCode::UNAUTHORIZED, "{\"status\":\"error\",\"message\":\"Authorization header required\"}".into());
+        };
+        site.app_calls.lock().unwrap().push((user.clone(), call.to_string()));
+        return match call {
+            "/auth/me" => json(StatusCode::OK, format!("{{\"status\":\"success\",\"user\":{{\"nick_name\":\"{user}\"}}}}")),
+            // One row of the filtered listing, whatever is asked.
+            "/perfumes" => json(
+                StatusCode::OK,
+                "{\"matches\":1,\"rows\":[{\"p_id\":\"63363\",\"p_name\":\"Sauvage (Eau de Toilette)\",\"p_name_url\":\"Sauvage_Eau_de_Toilette\",\
+                 \"b_name\":\"Dior\",\"b_name_url\":\"Dior\",\"p_release_year\":\"2015\",\"p_gender\":\"maennlich\",\"p_total_votings\":\"100\",\"p_avg_voting\":\"80\"}]}"
+                    .into(),
+            ),
+            // One brand, as recorded on the real site: Creed, found by the search and
+            // listed five rows a page, whatever page is asked (104 perfumes in all).
+            "/search" => json(StatusCode::OK, recorded("app_search_creed.json")),
+            "/brand_details" => json(StatusCode::OK, recorded("app_brand_details.json")),
+            _ => json(StatusCode::NOT_FOUND, "{\"error\":\"Not found\"}".into()),
+        };
+    }
+    if site.web_blocked.load(Ordering::SeqCst) {
+        return block_page();
+    }
     if path == "/api/alive" {
         return format!("{{\"csrf_key\":\"{CSRF}\"}}").into_response();
     }
     if path == "/api/account/login" {
         let count = site.logins.fetch_add(1, Ordering::SeqCst) + 1;
+        if site.login_unavailable.load(Ordering::SeqCst) {
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
+        }
         let user = f("username");
         if f("password") != format!("pw-{user}") || !site.accounts.lock().unwrap().contains_key(&user) {
             return redirect("/account/login_error");
@@ -209,9 +308,17 @@ async fn handler(State(site): State<Site>, method: Method, uri: Uri, headers: He
             .body(Body::empty())
             .unwrap();
     }
-    if path == "/Perfumes/Dior/Sauvage_Eau_de_Toilette" {
-        let fixture = format!("{}/../parfumo-client/tests/fixtures/perfume_sauvage.html", env!("CARGO_MANIFEST_DIR"));
-        return Html(std::fs::read_to_string(fixture).unwrap()).into_response();
+    // Three public pages, as recorded on the real site: a perfume, a search (20 results of
+    // 151, whatever is searched), and the page of a brand (Dior's, served as the page of
+    // Creed: France, founded in 1946).
+    let public_page = match path.as_str() {
+        "/Perfumes/Dior/Sauvage_Eau_de_Toilette" => Some("perfume_sauvage.html"),
+        "/s_perfumes_x.php" => Some("search.html"),
+        "/Perfumes/Creed" => Some("brand.html"),
+        _ => None,
+    };
+    if let Some(name) = public_page {
+        return Html(recorded(name)).into_response();
     }
 
     // Everything below belongs to an account.

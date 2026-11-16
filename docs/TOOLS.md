@@ -21,7 +21,9 @@ npx @modelcontextprotocol/inspector --cli http://127.0.0.1:8080/mcp --transport 
 
 Les sorties sont **abrégées pour la lecture** : les listes sont coupées à quelques éléments
 et les longs textes tronqués. Chaque coupe est signalée par une mention « omis dans cette
-documentation ». Rien d'autre n'a été modifié.
+documentation ». Rien d'autre n'a été modifié. Une seule exception, signalée comme telle :
+l'élément de liste construit à partir d'une réponse enregistrée, sous
+`parfumo_search_perfumes`.
 
 **Binaire local `parfumo-mcp`.** Il expose ces 48 outils à l'identique : mêmes noms,
 mêmes paramètres, mêmes sorties. Trois écarts, tous liés au compte : les erreurs
@@ -32,6 +34,62 @@ connexion que le binaire ouvre sur l'ordinateur de l'utilisateur
 « l'utilisateur » est l'unique utilisateur local. Si le compte vient de l'environnement
 (`PARFUMO_USER` et `PARFUMO_PASSWORD`, ou `PARFUMO_COOKIE`), ces messages disent de régler ces
 variables et `link_url` est absent. Les exemples de ce document viennent du serveur HTTP.
+
+## Deux façons de lire (version 0.3.0)
+
+Parfumo est lu par ses pages web. Depuis la version 0.3.0, quand le compte Parfumo de
+l'utilisateur est relié **en mode identifiants** (pseudo ou e-mail, et mot de passe), une
+partie des lectures de la base de données passe par l'interface JSON qu'utilise
+l'application de Parfumo (`/app/v1`), avec le jeton de session de ce membre. Les outils,
+leurs paramètres et leurs schémas de sortie sont les mêmes dans les deux cas.
+
+| Lecture | Outil | Par l'interface | Complété sur le site web |
+| --- | --- | --- | --- |
+| Recherche : texte, une marque, une année exacte, genres, tri | `parfumo_search_perfumes` | Oui | Rien |
+| Fiche d'un parfum | `parfumo_get_perfume` | Oui | Le libellé de rang (`ranking`), lu sur la page web du parfum : une requête de plus |
+| Marque | `parfumo_get_brand` | Oui | Le pays, et l'année de fondation quand l'interface n'en a pas, lus sur la page web de la marque : une requête de plus |
+| Parfumeur | `parfumo_get_perfumer` | Oui, quand le numéro du parfumeur est connu | Le pays, lu sur la page web du parfumeur : une requête de plus |
+| Parfums d'une année de sortie | `parfumo_get_rankings` avec `ranking=year` | Oui | Rien |
+| Similaires et superposition | `parfumo_get_similar_perfumes` | Oui | L'annuaire des dupes reste une page web |
+| Pseudo du membre, ses notes et ses votes de classification sur un parfum | Notes et votes : lus par `parfumo_rate_perfume` et `parfumo_classify_perfume` avant et après l'écriture. Pseudo : lu par les outils du compte qui en ont besoin (`parfumo_session_status`, listes des notes et des textes du membre…) | Oui | Une note de zéro et une classification déjà votée ou fermée sont laissées aux panneaux du site web |
+
+Tout le reste est lu sur les pages web, compte relié ou non : avis, statements, notes
+olfactives, tous les autres classements, forum, communautés, blogs, Souk, profils de
+membres, collection, ports, messagerie, réglages, et toutes les écritures.
+
+Les pages web répondent aussi à tout dans quatre cas : aucun compte n'est relié ; le compte
+est relié par un cookie de navigateur ; l'interface refuse le jeton de session, ou demande
+d'attendre ; l'interface ne peut pas répondre aussi complètement que le site web (sa
+recherche ne trouve pas la référence, une liste arrive sans son total, elle répond par un
+refus). La lecture passe alors au site web dans le même appel, sans erreur. Un total absent
+n'est jamais lu comme zéro.
+
+Ce qu'un appelant peut voir de différent quand une lecture passe par l'interface :
+
+- **Listes de parfums** (recherche, marque, parfumeur, année de sortie) : chaque parfum
+  porte son numéro `p_id` et, quand il en a, `rating`, `rating_count` et `reviews_count`.
+  `name` est le nom complet, concentration entre parenthèses (« Sauvage (Eau de
+  Toilette) »), et il n'y a pas de champ `concentration` séparé. La liste lue sur les pages
+  web donne « Sauvage » et `concentration: "Eau de Toilette"`. L'`id` (`Marque/Parfum`) et
+  l'`url` désignent le parfum comme dans une liste lue sur les pages web.
+- **Fiches** : la marque et les parfumeurs portent leur numéro (`numeric_id`).
+- **Ce que seule la page web montre** (libellé de rang, pays) y est lu, sans le jeton. Si
+  cette page ne peut pas être lue, la réponse de l'interface est renvoyée avec un
+  avertissement dans `warnings` (`ranking unavailable: …`, `country unavailable: …`,
+  `country and founding year unavailable: …`). Les
+  sorties d'une marque et d'un parfumeur ont pour cela une liste `warnings`, absente quand
+  elle est vide.
+- **Rien n'est conservé**, d'un côté comme de l'autre : chaque réponse est ce que Parfumo
+  dit au moment de l'appel. Seuls des identifiants stables (numéro d'un parfum, d'une
+  marque, d'un parfumeur) sont retenus en mémoire, pour éviter de les rechercher.
+
+Les exemples de ce document ont été obtenus par les pages web, avant la version 0.3.0.
+Aucune sortie réelle d'un outil lisant par l'interface n'y figure : les notes « Avec un
+compte relié en mode identifiants », sous les outils concernés, décrivent les champs. Le
+seul exemple qui s'y trouve est construit à partir d'une réponse enregistrée, et le dit.
+L'interface elle-même, ses appels et les règles que le code suit sont décrits dans
+[APP_API.md](APP_API.md) (en anglais) ; ce qui est prouvé et ce qui ne l'est pas, dans
+[STATUS.md](STATUS.md) (en anglais).
 
 ## Conventions communes
 
@@ -55,7 +113,7 @@ par le code, suivi d'un message qui dit quoi faire, puis du même contenu en JSO
 | --- | --- | --- |
 | `not_found` | Parfum, marque, parfumeur, note ou page introuvable | Oui, en direct (exemple en fin de document) |
 | `invalid_input` | Paramètre inutilisable : curseur invalide, URL hors de Parfumo, filtre ambigu. Code ajouté au tableau du cahier des charges | Oui, en direct |
-| `rate_limited` | Parfumo répond 429 après les nouvelles tentatives ; délai d'attente indiqué | Testé sur faux serveur seulement |
+| `rate_limited` | Parfumo répond 429 après les nouvelles tentatives ; délai d'attente indiqué. Depuis la version 0.3.0 : aussi quand une page web montre la page par laquelle Parfumo bloque l'adresse du serveur (« Access Denied … try again in … ») ; le message donne les secondes restantes, 300 au plus | Testé sur faux serveur seulement |
 | `captcha_required` | Parfumo ou Cloudflare demande une vérification humaine. Le serveur ne la résout jamais | Testé sur faux serveur seulement : aucun défi reçu en direct |
 | `parser_outdated` | La structure de la page a changé | Testé sur fixtures tronquées |
 | `upstream_error` | Erreur ou indisponibilité de Parfumo | Testé sur faux serveur seulement |
@@ -67,7 +125,21 @@ par le code, suivi d'un message qui dit quoi faire, puis du même contenu en JSO
   vrai au jalon 2. Voir la fin de ce document pour ce qui reste non prouvé côté compte.
 - **Tris de recherche** `durability_desc`, `sillage_desc`, `bottle_desc`, `pricing_desc` et
   `popularity_asc` : leurs codes sont lus dans le formulaire du site, ils n'ont pas été
-  appelés.
+  appelés sur la recherche web. Par l'interface de l'application, les douze codes de tri
+  ont été mesurés sur le vrai site le 15 novembre 2026, en lecture seule : tous sont
+  respectés.
+- **Lectures par l'interface de l'application** (version 0.3.0) : prouvées par des tests sur
+  des réponses enregistrées et, pour la recherche, la fiche (libellé de rang), la marque,
+  le parfumeur et l'année de sortie, faites sur le vrai site le 15 novembre 2026, en lecture
+  seule, avec le compte de test. Les similaires et les lectures propres au membre (pseudo,
+  notes, votes de classification) ont été lus par l'interface ce jour-là et ont répondu,
+  sans comparaison avec le site web. Ce jour-là, les
+  lectures du site web qui sont des requêtes POST (parfums similaires, graphique de
+  classification, filtre de marque de la recherche web) n'ont pas été comparées à celles de
+  l'interface. Le traitement par le code d'un jeton refusé, d'un blocage de l'adresse et
+  d'un mauvais mot de passe à la connexion de l'interface n'a jamais été exercé sur le vrai
+  site : il n'est prouvé que par les tests. La réponse du site à un mauvais mot de passe n'a
+  jamais été enregistrée. Détail dans [STATUS.md](STATUS.md).
 - **Filtre par concentration** : absent. Le formulaire de recherche du site n'a pas de champ
   pour la concentration. Elle est renvoyée dans les résultats quand le site l'affiche.
 - **Classement « top » général** : absent. Le site n'a de top que par genre.
@@ -92,7 +164,43 @@ Recherche par texte et filtres. À utiliser pour trouver l'`id` d'un parfum.
 Au moins un critère parmi `query`, `brand`, `perfumer`, `notes` et les années est exigé. Le
 site plafonne une recherche à 1 000 résultats.
 
-Appel réel : `query=sauvage`, `limit=3`.
+**Avec un compte relié en mode identifiants.** La recherche passe par l'interface de
+l'application quand elle ne porte que du texte (`query`), une marque, une année exacte
+(`year`), des genres et un tri. Avec `perfumer`, `notes`, `year_from` ou `year_to`, elle est
+lue sur le site web : l'interface ne sait pas exprimer ces critères. Elle l'est aussi quand
+la recherche de l'interface ne reconnaît pas la marque. Ce qui change dans la réponse :
+
+- chaque parfum porte `p_id` et, quand il en a, `rating`, `rating_count` et `reviews_count`
+  (l'exemple plus bas, lu sur la recherche web, ne les porte pas) ;
+- `name` est le nom complet (« Sauvage (Eau de Toilette) ») et le champ `concentration` est
+  absent ;
+- `total_items` est toujours présent, et la recherche n'est plus plafonnée à 1 000
+  résultats (50 pages) : `next_cursor` continue au-delà ;
+- sans tri demandé (`sort=default`), l'ordre est celui de la recherche web, les parfums les
+  plus notés d'abord. Mesuré sur le vrai site le 15 novembre 2026 : mêmes parfums dans le
+  même ordre que le site web pour une recherche par texte et une recherche par année.
+
+Un parfum d'une telle liste, construit à partir de la réponse enregistrée
+`crates/parfumo-client/tests/fixtures/app_perfumes_brand.json` (ce n'est pas une sortie
+réelle de l'outil ; les autres parfums de la liste sont omis dans cette documentation) :
+
+```json
+{
+  "brand": "Creed",
+  "gender": "unisex",
+  "id": "Creed/absolu-aventus",
+  "image_url": "https://media.parfumo.com/perfumes/9c/9cd3f6_absolu-aventus-creed_1200.jpg?width=240&aspect_ratio=1:1",
+  "name": "Absolu Aventus",
+  "p_id": 225233,
+  "rating": 8.5,
+  "rating_count": 1492,
+  "reviews_count": 86,
+  "url": "https://www.parfumo.com/Perfumes/Creed/absolu-aventus",
+  "year": 2023
+}
+```
+
+Appel réel, par les pages web : `query=sauvage`, `limit=3`.
 
 Texte (`content[0].text`) :
 
@@ -153,7 +261,32 @@ La pyramide est dans `notes` : `top`, `heart`, `base` quand le site la donne, si
 communauté par type, occasion, saison, public et style. `warnings` signale une partie
 secondaire qui n'a pas pu être lue.
 
-Appel réel : `perfume=Dior/Sauvage_Eau_de_Toilette`.
+**Avec un compte relié en mode identifiants.** La fiche est lue par l'interface de
+l'application, puis le libellé de rang (`ranking`) est lu sur la page web du parfum : une
+requête de plus. Si l'interface ne trouve pas le parfum ou refuse de répondre, la page web
+répond seule, comme sans compte. Ce qui change dans la réponse :
+
+- `brand` et chaque entrée de `perfumers` portent leur numéro, `numeric_id` ;
+- `facts` est le texte anglais seulement ; `facts` et `description` sont du texte brut, sauts
+  de ligne conservés ;
+- `classification` a les groupes de la fiche web, dans le même ordre (Type, Occasion,
+  Season, Audience & Style) et sur la même échelle : les parts de Type, Occasion et Season
+  sont rapportées à 100 sur les parts listées, celles d'Audience & Style forment deux
+  paires (Masculine et Feminine, Modern et Classic). `accords` reprend les cinq parts les
+  plus fortes du groupe Type ;
+- `warnings` peut porter `ranking unavailable: …` quand la page web n'a pas pu être lue, et
+  `classification: the "<groupe>" chart cannot be read from what the application interface
+  gives` quand l'interface donne un graphique sous une forme illisible : ce graphique est
+  alors omis.
+
+`perfume` accepte aussi, dans ce cas seulement, le numéro nu d'un parfum (`perfume=9438`),
+lu par l'interface. Un numéro n'a pas de page web derrière lui : l'erreur est `not_found`
+seulement quand l'interface répond 404, dit « not found », ou renvoie une fiche sans parfum
+ou sur un autre numéro ; tout autre refus est une erreur `upstream_error` qui reprend les
+mots de l'interface. Sans session de l'interface, un numéro nu est refusé avec
+`invalid_input`, comme avant.
+
+Appel réel, par les pages web : `perfume=Dior/Sauvage_Eau_de_Toilette`.
 
 Texte (`content[0].text`) :
 
@@ -493,7 +626,29 @@ Le site liste les similaires sans lien : seuls les cinq premiers ont leur `id` e
 `parfumo_search_perfumes`. Le premier appel pour un parfum coûte une dizaine de requêtes,
 donc une dizaine de secondes, à chaque appel : rien n'est conservé.
 
-Appel réel : `perfume=Dior/Sauvage_Eau_de_Toilette` (30 similaires, 30 en superposition,
+**Avec un compte relié en mode identifiants.** Les listes `similar` et `layering` sont lues
+par l'interface de l'application ; l'annuaire des dupes (`dupes`) reste lu sur la page web.
+Si l'interface ne trouve pas le parfum, n'a plus de fiche ou de liste pour lui (404, objet
+d'erreur sous le statut 200), ou si sa session se termine pendant la lecture, le site web
+répond à tout. Un numéro seul n'a pas de page web : l'erreur de l'interface est alors
+rapportée. Ce qui change dans la réponse :
+
+- chaque parfum de `similar` et de `layering` porte `votes`, et pas seulement ceux dont le
+  lien a été résolu ;
+- les lignes de l'interface n'ont pas d'adresse. Un parfum que le même utilisateur a déjà
+  rencontré dans une liste ou une fiche depuis le démarrage du serveur reçoit son `id` et
+  son `url` sans requête, où qu'il soit dans la liste ; parmi les cinq premiers, ceux qui ne
+  l'ont pas ainsi les reçoivent de leur fiche, une requête chacun. Les autres restent sans
+  `id`, comme avant ;
+- `warnings` peut porter `layering suggestions unavailable: …`, par exemple quand
+  l'interface renvoie la liste des similaires à la place de celle des superpositions : la
+  liste `layering` est alors vide.
+
+Cette lecture a été faite sur le vrai site le 15 novembre 2026 et a répondu ; elle n'a pas
+été comparée à celle du site web : la lecture web est une requête POST, et la vérification
+ne portait que sur des GET.
+
+Appel réel, par les pages web : `perfume=Dior/Sauvage_Eau_de_Toilette` (30 similaires, 30 en superposition,
 1 groupe de dupes ramené à 36 candidats pour tenir dans la limite de taille).
 
 Texte (`content[0].text`) :
@@ -606,7 +761,26 @@ Marque et liste paginée de ses parfums.
 | `brand` | texte, obligatoire | `id` de la marque, son nom, ou son URL Parfumo |
 | `limit`, `cursor` | | Pagination |
 
-Appel réel : `brand=Dior`, `limit=3`.
+**Avec un compte relié en mode identifiants.** La marque et ses parfums sont lus par
+l'interface de l'application, les plus notés d'abord, comme sur la page web. Le pays
+(`country`) est lu sur la page web de la marque, une requête de plus par appel ; l'année de
+fondation (`founded`) aussi, quand l'interface n'en a pas. Si la recherche de l'interface ne
+connaît pas la marque sous cet `id` ou ce nom, la page web répond seule. Ce qui change dans
+la réponse :
+
+- chaque parfum porte `p_id` ; `name` est le nom complet (« Sauvage (Eau de Toilette) ») et
+  le champ `concentration` est absent ;
+- `warnings`, nouvelle liste facultative, porte `country unavailable: …` quand la page web
+  de la marque n'a pas pu être lue, ou `country and founding year unavailable: …` quand
+  l'interface n'a pas non plus d'année de fondation : `country` (et `founded` dans le second
+  cas) est alors absent, le reste est renvoyé.
+
+Une référence faite seulement de chiffres est un `id` ou un nom comme un autre (`4711`),
+jamais un numéro de la base de données. Mesuré sur le vrai site le 15 novembre 2026 : mêmes
+parfums dans le même ordre que le site web sur les pages 1 et 2 d'une marque, et pays égal
+à celui de la page web.
+
+Appel réel, par les pages web : `brand=Dior`, `limit=3`.
 
 Texte (`content[0].text`) :
 
@@ -673,7 +847,25 @@ Parfumeur et liste paginée de ses créations.
 
 Les `id` du site sont irréguliers (`Franois_Demachy`) : passer le nom fonctionne.
 
-Appel réel : `perfumer=Francois Demachy`, `limit=3`.
+**Avec un compte relié en mode identifiants.** L'interface de l'application ne connaît un
+parfumeur que par son numéro, et aucun de ses appels n'en trouve un par son nom. Le
+parfumeur est donc lu par l'interface seulement quand son numéro est connu : le même
+utilisateur l'a rencontré, depuis le démarrage du serveur, dans une fiche de parfum lue par
+l'interface (le `numeric_id` de `perfumers`) ou sur une page de parfumeur déjà lue par elle,
+ou bien `perfumer` est ce numéro lui-même. Sinon la page web répond, comme sans compte. Par
+l'interface :
+
+- les créations viennent les plus notées d'abord, comme sur la page web ;
+- chaque parfum porte `p_id` et, quand il en a, `reviews_count` ; `name` est le nom complet
+  et le champ `concentration` est absent ;
+- le pays (`country`) est lu sur la page web du parfumeur, une requête de plus par appel ;
+  `warnings`, nouvelle liste facultative, porte `country unavailable: …` quand cette page
+  n'a pas pu être lue.
+
+Mesuré sur le vrai site le 15 novembre 2026 : mêmes parfums dans le même ordre que le site
+web sur une page de parfumeur, et pays égal à celui de la page web.
+
+Appel réel, par les pages web : `perfumer=Francois Demachy`, `limit=3`.
 
 Texte (`content[0].text`) :
 
@@ -808,7 +1000,16 @@ Classements du site.
 | `year` | entier | Année, obligatoire quand `ranking` vaut `year` |
 | `limit`, `cursor` | | Pagination |
 
-Appel réel : `ranking=top_men`, `limit=3`. Appelés aussi pour de vrai, sans erreur :
+**Avec un compte relié en mode identifiants.** Seul `ranking=year` passe par l'interface de
+l'application ; les sept autres classements sont lus sur les pages web. Les parfums de
+l'année viennent dans l'ordre de la page web, par nom. Chaque parfum porte `p_id` et, quand
+il en a, `rating`, `rating_count` et `reviews_count` ; `name` est le nom complet (« Sauvage
+(Eau de Toilette) ») et le champ `concentration` est absent ; `total_items` donne le nombre
+de parfums de l'année. Comme la page web, la liste s'arrête au millième parfum. Mesuré sur
+le vrai site le 15 novembre 2026 : mêmes parfums dans le même ordre que la page web
+`/Release_Years/2015`.
+
+Appel réel, par les pages web : `ranking=top_men`, `limit=3`. Appelés aussi pour de vrai, sans erreur :
 `ranking=year` avec `year=2024`, et `ranking=trends`.
 
 Texte (`content[0].text`) :
@@ -865,8 +1066,14 @@ Secours : lit une page publique de Parfumo et renvoie son texte nettoyé et ses 
 | `cursor` | | Suite d'une page longue (18 000 caractères par réponse) |
 
 GET uniquement, domaine Parfumo uniquement. Sont refusés avec `invalid_input` : tout autre
-hôte, les chemins `/api/`, `/action/` et `/account/delete`. Une page réservée aux connectés
-renvoie `reauth_required`.
+hôte, les chemins `/api/`, `/action/`, `/app/` et `/account/delete`. Une page réservée aux
+connectés renvoie `reauth_required`.
+
+Depuis la version 0.3.0, toute adresse sous `/app/` est refusée, avec ou sans compte relié :
+c'est l'interface de l'application de Parfumo, qui ne se lit pas comme une page. Une lecture
+de page ne porte pas de jeton de session, et quelques requêtes sans jeton valide font
+bloquer l'adresse du serveur pendant cinq minutes. Le refus a lieu avant tout envoi, quelle
+que soit l'écriture de l'adresse, et vaut aussi pour une redirection qui y mènerait.
 
 Appel réel : `url=/rules`.
 

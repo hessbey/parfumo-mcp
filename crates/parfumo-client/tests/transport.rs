@@ -178,6 +178,37 @@ async fn logout(State(m): S) -> Response {
     html("logged out")
 }
 
+async fn to_app() -> Response {
+    redirect("/app/v1/auth/me")
+}
+
+/// The application interface, asked without a token: what must never happen.
+async fn app_interface(State(m): S) -> Response {
+    m.hit("app");
+    (StatusCode::UNAUTHORIZED, r#"{"status":"error","message":"Authorization header required"}"#).into_response()
+}
+
+/// The page by which the site tells that it blocks the address. The page itself was not
+/// recorded: these are the words and the status docs/APP_API.md quotes from it.
+async fn blocked(State(m): S) -> Response {
+    m.hit("blocked");
+    (
+        StatusCode::NOT_FOUND,
+        html("<html><head><title>Access Denied</title></head><body><h1>Access Denied</h1><p>try again in 5 minutes</p></body></html>"),
+    )
+        .into_response()
+}
+
+/// A page that does not exist, and says so with the heading of the block page: it lacks
+/// the wait the block page announces.
+async fn denied() -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        html("<html><head><title>Access Denied</title></head><body><h1>Access Denied</h1><p>This page is hidden.</p></body></html>"),
+    )
+        .into_response()
+}
+
 async fn moved() -> Response {
     redirect("/Perfumes/Dior")
 }
@@ -206,6 +237,11 @@ async fn start() -> (String, Arc<Mock>) {
         .route("/moved", get(moved))
         .route("/to_internal", get(to_internal))
         .route("/api/account/logout", get(logout))
+        .route("/to_app", get(to_app))
+        .route("/Perfumes/Moved/To_App", get(to_app))
+        .route("/app/v1/{*call}", get(app_interface))
+        .route("/blocked", get(blocked))
+        .route("/denied", get(denied))
         .fallback(not_found)
         .with_state(mock.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -301,6 +337,39 @@ async fn not_found_and_redirects() {
     let err = c.fetch_page("/to_internal").await.unwrap_err();
     assert!(matches!(&err, ClientError::InvalidInput(_)), "{err:?}");
     assert_eq!(_mock.count("logout"), 0, "the internal route must never be requested");
+}
+
+#[tokio::test]
+async fn nothing_is_asked_of_the_application_interface_without_a_token() {
+    let (base, mock) = start().await;
+    let c = client(&base);
+    // Asked for by its address, however it is written, or through a page that points to it.
+    for target in ["/app/v1/auth/me", "/APP/v1/auth/me", "/%61pp/v1/auth/me", "/app//v1/auth/me", "/to_app"] {
+        let err = c.fetch_page(target).await.unwrap_err();
+        assert!(matches!(&err, ClientError::InvalidInput(_)), "{target}: {err:?}");
+    }
+    // Not only the page reader: any read whose page points there stops before the request.
+    let err = c.get_perfume("Moved/To_App").await.unwrap_err();
+    assert!(matches!(&err, ClientError::InvalidInput(_)), "{err:?}");
+    assert_eq!(mock.count("app"), 0, "a request without a token reached the application interface");
+}
+
+#[tokio::test]
+async fn the_block_page_on_a_web_page_asks_to_wait_instead_of_saying_not_found() {
+    let (base, mock) = start().await;
+    let c = client(&base);
+    // A page of the site that merely has the heading of the block page is a page that does
+    // not exist: it stops nothing, for this user or any other.
+    assert!(matches!(c.fetch_page("/denied").await, Err(ClientError::NotFound(_))), "taken for a block of the address");
+    assert!(!c.app_blocked(), "one page with that heading stopped the application interface for the whole process");
+    // The block page itself: its heading and the wait it announces.
+    assert_eq!(c.fetch_page("/blocked").await.unwrap_err(), ClientError::RateLimited { retry_after_secs: Some(300) });
+    assert_eq!(mock.count("blocked"), 1, "the page is not asked for again");
+    assert!(c.app_blocked(), "the address is blocked: nothing leaves for the application interface");
+    // The web site is still asked while the block lasts: it is not known to cover it.
+    assert!(c.fetch_page("/moved").await.is_ok());
+    // An ordinary 404 is still a page that does not exist.
+    assert!(matches!(c.fetch_page("/nope").await, Err(ClientError::NotFound(_))));
 }
 
 #[tokio::test]
@@ -547,6 +616,14 @@ async fn fetch_page_refuses_foreign_hosts_and_internal_routes() {
         "/account/password_forgot",
         "/account/email",
         "/app_v5/api/x",
+        "/app/v1",
+        "/app/v1/auth/me",
+        "/app/v1/search?filter=x",
+        "/APP/v1/auth/me",
+        "/%61pp/v1/auth/me",
+        "/app//v1/auth/me",
+        "/Perfumes/../app/v1/auth/me",
+        "https://www.parfumo.com/app/v1/perfume_details/1",
         "/login.php",
         "",
         "/a\\b",

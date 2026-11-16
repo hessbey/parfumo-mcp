@@ -2,6 +2,13 @@
 //! Independent of MCP. See `docs/DISCOVERY.md` for the measured behaviour of the site.
 
 mod account;
+mod app;
+mod app_brand;
+mod app_db;
+mod app_own;
+mod app_perfumer;
+mod app_rankings;
+mod app_similar;
 mod client;
 mod error;
 mod forum;
@@ -13,7 +20,7 @@ mod social;
 mod transport;
 
 pub use account::{calls, find_list};
-pub use client::ParfumoClient;
+pub use client::{Completed, ParfumoClient};
 pub use client::{LISTING_TTL, RECORD_TTL};
 pub use error::ClientError;
 pub use models::*;

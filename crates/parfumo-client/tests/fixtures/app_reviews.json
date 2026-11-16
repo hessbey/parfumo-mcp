@@ -1,0 +1,52 @@
+{
+ "reviews": [
+  {
+   "voting": "8.5",
+   "voting_r": 8,
+   "awards": "1",
+   "replies": 0,
+   "review_id": "723108",
+   "user_id": 1,
+   "awarded": 0,
+   "awards_hidden": 0,
+   "photo": "https://media.parfumo.com/user_photo/placeholder.jpg",
+   "nick_name": "member1",
+   "gender": "m",
+   "date": "12 days ago",
+   "review_title": "Title 1",
+   "review_text": "First paragraph of review 1.<br />\n<br />\nSecond paragraph, with &quot;quotes&quot; &amp; an entity."
+  },
+  {
+   "voting": "9.0",
+   "voting_r": 9,
+   "awards": "1",
+   "replies": 0,
+   "review_id": "721594",
+   "user_id": 2,
+   "awarded": 0,
+   "awards_hidden": 0,
+   "photo": "https://media.parfumo.com/user_photo/placeholder.jpg",
+   "nick_name": "member2",
+   "gender": "f",
+   "date": "18 days ago",
+   "review_title": "Title 2",
+   "review_text": "First paragraph of review 2.<br />\n<br />\nSecond paragraph, with &quot;quotes&quot; &amp; an entity."
+  },
+  {
+   "voting": "7.0",
+   "voting_r": 7,
+   "awards": "3",
+   "replies": 1,
+   "review_id": "711257",
+   "user_id": 3,
+   "awarded": 0,
+   "awards_hidden": 0,
+   "photo": "https://media.parfumo.com/user_photo/placeholder.jpg",
+   "nick_name": "member3",
+   "gender": "m",
+   "date": "1 month ago",
+   "review_title": "Title 3",
+   "review_text": "First paragraph of review 3.<br />\n<br />\nSecond paragraph, with &quot;quotes&quot; &amp; an entity."
+  }
+ ]
+}

@@ -212,6 +212,9 @@ pub struct EntityPerfumesOutput {
     /// Pass as `cursor` to get the following perfumes. Absent when there is nothing more.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<String>,
+    /// Non-fatal problems: optional parts that could not be loaded (for example the country).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -432,6 +435,7 @@ struct EntityMeta {
     founded: Option<u16>,
     is_category: Option<bool>,
     categories: Vec<EntityRef>,
+    warnings: Vec<String>,
 }
 
 impl ParfumoTools {
@@ -456,19 +460,30 @@ impl ParfumoTools {
             let collected =
                 paging::collect_pages(start, paging::clamp_limit(limit), |page| fetch(client.clone(), page)).await.map_err(|e| self.client_err(e))?;
             let (items, next, total, meta) = paging::finish_pages(collected, MAX_STRUCTURED_CHARS - 3_000);
-            let EntityMeta { entity, country, founded, is_category, categories } = meta.into();
+            let EntityMeta { entity, country, founded, is_category, categories, warnings } = meta.into();
             let header = format!(
-                "{kind} {} (id: {}): {} perfumes returned{}.{}",
+                "{kind} {} (id: {}): {} perfumes returned{}.{}{}",
                 entity.name,
                 entity.id,
                 items.len(),
                 total.map(|t| format!(" of {t}")).unwrap_or_default(),
-                more(&next)
+                more(&next),
+                if warnings.is_empty() { String::new() } else { format!(" Warnings: {}.", warnings.join("; ")) }
             );
             let text = paging::digest(header, items.iter().map(summary_line).collect::<Vec<_>>());
             Ok((
                 text,
-                EntityPerfumesOutput { entity, country, founded, is_category, categories, perfumes: items, total_items: total, next_cursor: next },
+                EntityPerfumesOutput {
+                    entity,
+                    country,
+                    founded,
+                    is_category,
+                    categories,
+                    perfumes: items,
+                    total_items: total,
+                    next_cursor: next,
+                    warnings,
+                },
             ))
         })
         .await
@@ -676,13 +691,16 @@ impl ParfumoTools {
     )]
     async fn get_brand(&self, Parameters(p): Parameters<BrandParams>, caller: Caller) -> Result<CallToolResult, ErrorData> {
         let brand = p.brand.clone();
+        // The head of the brand (its country) is that of the first page read in this call.
+        let first = std::sync::atomic::AtomicBool::new(true);
         self.entity_tool(&caller, "parfumo_get_brand", "Brand", &p.brand, p.limit, p.cursor, move |client, page| {
             let brand = brand.clone();
+            let head = first.swap(false, std::sync::atomic::Ordering::Relaxed);
             async move {
-                client
-                    .get_brand(&brand, page)
-                    .await
-                    .map(|b| (b.perfumes, EntityMeta { entity: b.brand, country: b.country, founded: b.founded, ..Default::default() }))
+                let read = if head { client.get_brand(&brand, page).await } else { client.get_brand_rows(&brand, page).await };
+                read.map(|b| {
+                    (b.perfumes, EntityMeta { entity: b.brand, country: b.country, founded: b.founded, warnings: b.warnings, ..Default::default() })
+                })
             }
         })
         .await
@@ -696,13 +714,14 @@ impl ParfumoTools {
     )]
     async fn get_perfumer(&self, Parameters(p): Parameters<PerfumerParams>, caller: Caller) -> Result<CallToolResult, ErrorData> {
         let perfumer = p.perfumer.clone();
+        // The head of the perfumer (their country) is that of the first page read in this call.
+        let first = std::sync::atomic::AtomicBool::new(true);
         self.entity_tool(&caller, "parfumo_get_perfumer", "Perfumer", &p.perfumer, p.limit, p.cursor, move |client, page| {
             let perfumer = perfumer.clone();
+            let head = first.swap(false, std::sync::atomic::Ordering::Relaxed);
             async move {
-                client
-                    .get_perfumer(&perfumer, page)
-                    .await
-                    .map(|b| (b.perfumes, EntityMeta { entity: b.perfumer, country: b.country, ..Default::default() }))
+                let read = if head { client.get_perfumer(&perfumer, page).await } else { client.get_perfumer_rows(&perfumer, page).await };
+                read.map(|b| (b.perfumes, EntityMeta { entity: b.perfumer, country: b.country, warnings: b.warnings, ..Default::default() }))
             }
         })
         .await

@@ -26,7 +26,7 @@ Everything is set through environment variables. No secret is written to a versi
 | `PARFUMO_MCP_PUBLIC_WRITE_CAPS` | defaults below | Daily caps on public writes, per tool and per user |
 | `PARFUMO_MCP_WRITE_RECIPIENTS` | empty (no restriction) | Parfumo nicknames the server accepts to write to |
 | `PARFUMO_MCP_CANARY_HOUR` | `4` | UTC hour (0–23) of the daily canary. `off` disables it |
-| `PARFUMO_MCP_CANARY_USER` | empty (public pages only) | Server user whose linked Parfumo account — a test account — the canary also reads |
+| `PARFUMO_MCP_CANARY_USER` | empty (public pages only) | Server user whose linked Parfumo account — a test account — the canary also reads. The application interface is only checked when that account is linked in credentials mode |
 | `PARFUMO_MCP_CANARY_WEBHOOK` | empty | URL that receives a JSON alert when the canary is not `ok`, and again when it recovers (Slack and Discord formats) |
 
 ## Public writes
@@ -73,7 +73,8 @@ These are not configurable.
 
 | | |
 | --- | --- |
-| Freshness | Every read asks Parfumo: no page is kept and served again, for public pages as for account data |
+| Freshness | Every read asks Parfumo: no page is kept and served again, for public pages as for account data. The same holds for the answers of the application interface |
+| Application interface | Used for part of the database reads whenever the user's Parfumo account is linked in credentials mode, never otherwise. No variable turns it on or off, and version 0.3.0 adds no variable. Its requests are held to the same rate limits as the web pages and carry the same `User-Agent` and the member's own session token; the application's own key is never used. See [Application interface](APP_API.md) |
 | Audit log | Every tool call: tool, target, outcome, duration and number of writes really sent to Parfumo. Kept 90 days |
 | `User-Agent` | Fixed and honest; no rotating browser imitation |
 | Captcha, Cloudflare challenge | Never solved or bypassed: the tool returns `captcha_required` |

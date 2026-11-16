@@ -375,6 +375,12 @@ impl ParfumoClient {
         if let Some(nick) = self.t.nick.lock().unwrap_or_else(|e| e.into_inner()).clone() {
             return Ok(nick);
         }
+        // Through the application interface when a session of it is held; the account page otherwise.
+        if self.has_app_session()
+            && let Some(answer) = crate::app::settle(self.app_own_nick().await)
+        {
+            return answer;
+        }
         let (_, html) = self.t.get(routes::LOGGED_IN_PROBE, None, true, false).await?;
         let nick = parse::parse_own_nick(&html)?;
         *self.t.nick.lock().unwrap_or_else(|e| e.into_inner()) = Some(nick.clone());
@@ -388,12 +394,26 @@ impl ParfumoClient {
 
     /// The member's own ratings of a perfume (0-10 per scale, `None` when not rated).
     pub async fn my_ratings_of(&self, p_id: u64) -> Result<MemberRatings, ClientError> {
+        // Through the application interface when a session of it is held and its answer is
+        // one whose meaning is known; the panel of the web site otherwise.
+        if self.has_app_session()
+            && let Some(answer) = crate::app::settle(self.app_my_ratings_of(p_id).await)
+        {
+            return answer;
+        }
         let body = self.panel(routes::RATE_PANEL, vec![("perfume_id".into(), p_id.to_string())]).await?;
         parse::parse_rate_panel(&body)
     }
 
     /// Classification labels of a perfume with the member's votes.
     pub async fn my_classification_of(&self, p_id: u64) -> Result<Vec<ClassChoice>, ClientError> {
+        // Through the application interface when a session of it is held and the member has
+        // no vote on the perfume, the only answer recorded; the panel of the web site otherwise.
+        if self.has_app_session()
+            && let Some(answer) = crate::app::settle(self.app_my_classification_of(p_id).await)
+        {
+            return answer;
+        }
         let body = self.panel(routes::CLASSIFY_PANEL, vec![("perfume_id".into(), p_id.to_string())]).await?;
         parse::parse_classify_panel(&body)
     }

@@ -1,0 +1,12 @@
+{
+ "login_status": 1,
+ "nick_name": "testuser",
+ "user_id": "1",
+ "ratings": {
+  "scent": "80",
+  "durability": "90",
+  "sillage": "70",
+  "bottle": "60",
+  "pricing": "90"
+ }
+}

@@ -382,6 +382,9 @@ pub struct BrandPage {
     pub founded: Option<u16>,
     /// Perfumes of the brand (one native page).
     pub perfumes: Listing<PerfumeSummary>,
+    /// Non-fatal problems: optional parts that could not be loaded.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 /// Perfumer record and one page of their creations.
@@ -394,6 +397,9 @@ pub struct PerfumerPage {
     pub country: Option<String>,
     /// Perfumes created (one native page).
     pub perfumes: Listing<PerfumeSummary>,
+    /// Non-fatal problems: optional parts that could not be loaded.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 /// Fragrance note record and one page of perfumes containing it.

@@ -1,6 +1,12 @@
 //! HTTP transport: fixed honest User-Agent, per-client and global rate limits with
 //! random jitter, per-client cookie jar, exponential backoff, challenge detection,
 //! response cache hook. No HTML knowledge here except what `site.rs` exposes.
+//!
+//! Every request of either interface leaves through [`Transport::send_with`]: it is where
+//! the rules of the application interface (`/app/v1`) hold for every caller. Nothing goes
+//! there without the member's token, except the login; the token is the one held when the
+//! request leaves, not when it was queued; nothing goes there while the site blocks the
+//! address.
 
 use std::{
     num::NonZeroU32,
@@ -18,6 +24,7 @@ use serde::{Deserialize, Serialize};
 use tokio::time::Instant;
 
 use crate::{
+    app::{self, AppSession},
     error::ClientError,
     parse,
     site::{markers, routes},
@@ -57,15 +64,26 @@ impl Default for ClientConfig {
 }
 
 /// Rate limiter shared by every client of the process (all users together).
+///
+/// It also remembers that the site blocked the address of the process: a block is per
+/// address, so every client of every user must know of it at once.
 pub struct GlobalLimiter {
     inner: Option<DefaultDirectRateLimiter>,
+    /// Until when the site blocks this address, as far as its block page told.
+    blocked_until: Mutex<Option<Instant>>,
+}
+
+/// Whole seconds from `now` to `end`, rounded up: a wait announced is never too short.
+fn secs_left(end: Instant, now: Instant) -> u64 {
+    let left = end.saturating_duration_since(now);
+    left.as_secs() + u64::from(left.subsec_nanos() > 0)
 }
 
 impl GlobalLimiter {
     /// At most `per_second` requests per second in total. `0` disables the limit.
     pub fn new(per_second: u32) -> Arc<Self> {
         let inner = NonZeroU32::new(per_second).map(|n| RateLimiter::direct(Quota::per_second(n).allow_burst(NonZeroU32::MIN)));
-        Arc::new(Self { inner })
+        Arc::new(Self { inner, blocked_until: Mutex::new(None) })
     }
 
     pub(crate) async fn acquire(&self) {
@@ -73,18 +91,77 @@ impl GlobalLimiter {
             limiter.until_ready().await;
         }
     }
+
+    /// The block page was just met: the address is blocked for [`app::BLOCK`] from the
+    /// first time the page was shown. Returns the seconds left to wait.
+    pub(crate) fn block(&self) -> u64 {
+        self.block_at(Instant::now())
+    }
+
+    fn block_at(&self, now: Instant) -> u64 {
+        let mut until = self.blocked_until.lock().unwrap_or_else(|e| e.into_inner());
+        // A block already known keeps its end: the page met again during it (on a web page,
+        // while the interface is left alone) says how long is left, not five minutes more.
+        let end = until.filter(|end| *end > now).unwrap_or(now + app::BLOCK);
+        *until = Some(end);
+        secs_left(end, now)
+    }
+
+    /// Seconds left of a block of the address, when one is known and not over.
+    pub(crate) fn blocked_secs(&self) -> Option<u64> {
+        self.blocked_secs_at(Instant::now())
+    }
+
+    fn blocked_secs_at(&self, now: Instant) -> Option<u64> {
+        let end = (*self.blocked_until.lock().unwrap_or_else(|e| e.into_inner()))?;
+        (end > now).then(|| secs_left(end, now))
+    }
 }
 
-/// Per-user request slot (minimum interval + jitter). Share one between the clients of a
-/// same user (public and account) so that together they stay under one request per second.
+/// What the clients of one user share: their request slot (minimum interval + jitter), so
+/// that together they stay under one request per second, and the session of the
+/// application interface, which has one owner per user. Give the same one to the public
+/// client and the account client of a user: a token the site refuses to one of them is
+/// then gone for both at once.
 #[derive(Default)]
 pub struct UserLimiter {
-    next_slot: tokio::sync::Mutex<Option<Instant>>,
+    next_slot: Arc<tokio::sync::Mutex<Option<Instant>>>,
+    /// The session token of the application interface of this user, and what became of it.
+    pub(crate) app: AppSession,
+    /// One call made as the member at a time, from the moment its token is read until its
+    /// answer is known: a call that waited behind a refusal finds the token gone.
+    app_turn: tokio::sync::Mutex<()>,
 }
 
 impl UserLimiter {
     pub fn new() -> Arc<Self> {
         Arc::new(Self::default())
+    }
+
+    /// A limiter on the same request slot, without the session of the application
+    /// interface: for a client of the user that must read the web pages whatever the
+    /// account holds (the canary checks the HTML).
+    pub fn web_only(&self) -> Arc<Self> {
+        Arc::new(Self { next_slot: self.next_slot.clone(), ..Self::default() })
+    }
+
+    /// Forgets the session token without telling the site, for every client of the user.
+    /// A login still under way when this is called does not bring a session back.
+    pub fn forget_app_session(&self) {
+        self.app.forget();
+    }
+
+    /// Whether the session token changed (a login obtained one, or the site refused it)
+    /// since this was last asked: the embedding application then stores the session again.
+    /// Asking clears the mark.
+    pub fn take_app_session_change(&self) -> bool {
+        self.app.take_change()
+    }
+
+    /// Puts the mark of [`Self::take_app_session_change`] back, when the session could not
+    /// be stored after all.
+    pub fn flag_app_session_change(&self) {
+        self.app.flag_change();
     }
 }
 
@@ -118,9 +195,13 @@ impl std::fmt::Debug for StoredCookie {
 }
 
 /// Minimal cookie jar: one per client, enumerable so that sessions can be persisted.
-#[derive(Default)]
+///
+/// The session token of the application interface is saved and restored with the cookies,
+/// under a name and a domain of its own, but it is not kept here: it belongs to the user
+/// ([`UserLimiter`]), not to one client, and it is never sent as a cookie.
 pub(crate) struct Jar {
     cookies: Mutex<Vec<StoredCookie>>,
+    user: Arc<UserLimiter>,
 }
 
 fn domain_matches(host: &str, domain: &str) -> bool {
@@ -138,15 +219,29 @@ impl Jar {
         self.cookies.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    pub(crate) fn export(&self) -> Vec<StoredCookie> {
-        self.lock().clone()
+    fn new(user: Arc<UserLimiter>) -> Self {
+        Self { cookies: Mutex::default(), user }
     }
 
+    /// The cookies of the web session, and the session token of the application interface
+    /// when one is held.
+    pub(crate) fn export(&self) -> Vec<StoredCookie> {
+        let mut all = self.lock().clone();
+        all.extend(self.user.app.stored());
+        all
+    }
+
+    /// Forgets the web session. The session of the application interface is another one,
+    /// which a new login to the web site does not end: its token stays.
     pub(crate) fn clear(&self) {
         self.lock().clear();
     }
 
     pub(crate) fn upsert(&self, cookie: StoredCookie) {
+        if AppSession::is_stored(&cookie) {
+            self.user.app.restore(&cookie.value);
+            return;
+        }
         let mut all = self.lock();
         all.retain(|c| !(c.name == cookie.name && c.domain == cookie.domain && c.path == cookie.path));
         all.push(cookie);
@@ -239,6 +334,44 @@ pub(crate) struct RawResponse {
     pub location: Option<String>,
 }
 
+/// Which interface a request is for, and what it carries.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Auth {
+    /// A page or an internal call of the web site: the cookies of the jar.
+    Web,
+    /// The login of the application interface: the one call that leaves without a token.
+    Login,
+    /// A call of the application interface made as the member: the session token the user
+    /// holds when the request leaves.
+    Member,
+}
+
+/// Why an attempt gave no answer.
+enum Unsent {
+    /// Nothing was sent: the request may not leave.
+    Refused(ClientError),
+    Network(reqwest::Error),
+}
+
+/// A path as a server reads it: percent-decoded, lower case, without doubled slashes.
+fn plain_path(path: &str) -> String {
+    let bytes = path.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = (bytes[i] == b'%').then(|| path.get(i + 1..i + 3).and_then(|h| u8::from_str_radix(h, 16).ok())).flatten();
+        decoded.push(hex.unwrap_or(bytes[i]));
+        i += if hex.is_some() { 3 } else { 1 };
+    }
+    let mut plain = String::with_capacity(decoded.len());
+    for c in String::from_utf8_lossy(&decoded).to_lowercase().chars() {
+        if c != '/' || !plain.ends_with('/') {
+            plain.push(c);
+        }
+    }
+    plain
+}
+
 pub(crate) struct Transport {
     pub cfg: ClientConfig,
     pub base: Url,
@@ -246,10 +379,24 @@ pub(crate) struct Transport {
     pub jar: Arc<Jar>,
     global: Arc<GlobalLimiter>,
     cache: Option<Arc<dyn PageCache>>,
-    next_slot: Arc<UserLimiter>,
+    pub(crate) user: Arc<UserLimiter>,
     csrf: Mutex<Option<String>>,
     /// Nickname of the logged-in member, memoised with the session (see `forget_csrf`).
     pub(crate) nick: Mutex<Option<String>>,
+    // The three memories below hold identifiers only (a name and the number the application
+    // interface knows it by), never a part of an answer. Each is bounded where it is filled:
+    // a server runs for weeks.
+    /// Number and `Brand/Perfume` id of the perfumes met in listings and records, by
+    /// lower-case id: the application interface only knows perfumes by number. One id per
+    /// number, the one the site gave last: a renamed perfume loses its old address.
+    pub(crate) perfume_ids: Mutex<std::collections::HashMap<String, (u64, String)>>,
+    /// Number of the brands already looked up, by reference; `None` for a reference the
+    /// search of the application does not know. A listing is read page after page: its
+    /// brand is looked up once.
+    pub(crate) brand_ids: Mutex<std::collections::HashMap<String, Option<u64>>>,
+    /// Number and lower-case name of the perfumers met in perfume records, by lower-case slug:
+    /// the application interface only knows perfumers by number, and has no call that finds one.
+    pub(crate) perfumer_ids: Mutex<std::collections::HashMap<String, (u64, String)>>,
 }
 
 /// TLS settings of every outgoing connection of the project: the `ring` provider and the
@@ -275,7 +422,7 @@ impl Transport {
         if !matches!(base.scheme(), "http" | "https") || base.host_str().is_none() {
             return Err(ClientError::InvalidInput("base_url must be an http(s) URL with a host".into()));
         }
-        let jar = Arc::new(Jar::default());
+        let jar = Arc::new(Jar::new(limiter.clone()));
         let http = reqwest::Client::builder()
             .user_agent(cfg.user_agent.clone())
             .redirect(Policy::none())
@@ -284,7 +431,20 @@ impl Transport {
             .use_preconfigured_tls(tls_config())
             .build()
             .map_err(|e| ClientError::Upstream(format!("cannot build HTTP client: {}", e.without_url())))?;
-        Ok(Self { cfg, base, http, jar, global, cache, next_slot: limiter, csrf: Mutex::new(None), nick: Mutex::new(None) })
+        Ok(Self {
+            cfg,
+            base,
+            http,
+            jar,
+            global,
+            cache,
+            user: limiter,
+            csrf: Mutex::new(None),
+            nick: Mutex::new(None),
+            perfume_ids: Mutex::new(std::collections::HashMap::new()),
+            brand_ids: Mutex::new(std::collections::HashMap::new()),
+            perfumer_ids: Mutex::new(std::collections::HashMap::new()),
+        })
     }
 
     pub fn host(&self) -> &str {
@@ -305,16 +465,67 @@ impl Transport {
         *self.nick.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
 
-    /// Waits for this client's slot (min interval + random jitter), then for the global limiter.
-    async fn throttle(&self) {
-        let mut slot = self.next_slot.next_slot.lock().await;
+    /// Waits for this client's slot (min interval + random jitter), then for the global
+    /// limiter, then asks `clear` whether the request may still leave: what was true when
+    /// it was queued (a token held, no block of the address) may no longer be. A request
+    /// that does not leave takes no slot.
+    async fn throttle<T>(&self, clear: impl Fn() -> Result<T, ClientError>) -> Result<T, ClientError> {
+        // No reason to wait for a slot that would not be used.
+        clear()?;
+        let mut slot = self.user.next_slot.lock().await;
         if let Some(at) = *slot {
             let jitter_ms = self.cfg.jitter.as_millis() as u64;
             let jitter = if jitter_ms == 0 { 0 } else { rand::random_range(0..=jitter_ms) };
             tokio::time::sleep_until(at + Duration::from_millis(jitter)).await;
         }
         self.global.acquire().await;
+        let cleared = clear()?;
         *slot = Some(Instant::now() + self.cfg.min_interval);
+        Ok(cleared)
+    }
+
+    /// The route of the application interface a request leads to, as the site would read
+    /// its address (dot segments, case, percent-encoding and doubled slashes resolved):
+    /// `Some("/auth/login")`. `None` for a page of the web site.
+    pub(crate) fn app_route(&self, path_and_query: &str) -> Option<String> {
+        let url = Url::parse(&self.absolute(path_and_query)).ok()?;
+        let path = plain_path(url.path());
+        let base = plain_path(self.base.path());
+        let route = path.strip_prefix(base.trim_end_matches('/'))?.strip_prefix(app::PREFIX)?;
+        (route.is_empty() || route.starts_with('/')).then(|| route.to_string())
+    }
+
+    /// Refuses, before anything is sent or waited for, a request that would break the
+    /// rules of the application interface, whoever asks for it: a request without the
+    /// member's token under `/app/v1` (a page read, a redirect followed), other than the
+    /// login; or the member's token on its way to a page of the web site.
+    fn check_route(&self, path_and_query: &str, auth: Auth) -> Result<(), ClientError> {
+        match (auth, self.app_route(path_and_query).as_deref()) {
+            (Auth::Web, None) | (Auth::Member, Some(_)) | (Auth::Login, Some(app::LOGIN)) => Ok(()),
+            (Auth::Web, Some(_)) => Err(ClientError::InvalidInput("the application interface of Parfumo is not read as a page".into())),
+            _ => Err(ClientError::InvalidInput("not a call of the application interface of Parfumo".into())),
+        }
+    }
+
+    /// Seconds left of a block of the address of this process, when one is known.
+    pub(crate) fn blocked_secs(&self) -> Option<u64> {
+        self.global.blocked_secs()
+    }
+
+    /// What a request leaves with, decided when it leaves: the member's token for a call
+    /// made as the member, nothing otherwise. Nothing leaves for the application interface
+    /// while the site blocks the address, nor as the member without a token.
+    fn clearance(&self, auth: Auth) -> Result<Option<String>, ClientError> {
+        if auth == Auth::Web {
+            return Ok(None);
+        }
+        if let Some(secs) = self.blocked_secs() {
+            return Err(ClientError::RateLimited { retry_after_secs: Some(secs) });
+        }
+        match auth {
+            Auth::Member => self.user.app.token().map(Some).ok_or(ClientError::LoginRequired),
+            _ => Ok(None),
+        }
     }
 
     async fn send_once(
@@ -322,27 +533,45 @@ impl Transport {
         method: &Method,
         path_and_query: &str,
         form: Option<&[(String, String)]>,
-    ) -> Result<(RawResponse, Option<u64>, bool), reqwest::Error> {
-        self.throttle().await;
+        auth: Auth,
+    ) -> Result<(RawResponse, Option<u64>, bool), Unsent> {
+        // Held until the answer is known: the next call made as the member reads the token
+        // only then, and finds none if this one was refused, however slow the refusal.
+        let _turn = match auth {
+            Auth::Member => Some(self.user.app_turn.lock().await),
+            _ => None,
+        };
+        let bearer = self.throttle(|| self.clearance(auth)).await.map_err(Unsent::Refused)?;
         let url = self.absolute(path_and_query);
         let mut req = self.http.request(method.clone(), url);
+        if let Some(token) = &bearer {
+            req = req.bearer_auth(token);
+        }
         if let Some(form) = form {
             req = req.form(form);
         }
-        let resp = req.send().await?;
+        let resp = req.send().await.map_err(Unsent::Network)?;
         let status = resp.status().as_u16();
+        if status == 401
+            && let Some(token) = &bearer
+        {
+            // Before anything else can fail: the token that was sent, and only that one, is
+            // forgotten for every client of the user, and is never held again.
+            self.user.app.refuse(token);
+        }
         let headers = resp.headers();
         let location = headers.get(LOCATION).and_then(|v| v.to_str().ok()).map(str::to_string);
         let retry_after = headers.get(RETRY_AFTER).and_then(|v| v.to_str().ok()).and_then(|v| v.trim().parse().ok());
         let challenge_header = headers.contains_key(markers::CHALLENGE_HEADER);
         // Make sure Set-Cookie headers of redirects are seen even if the store hook changes.
         let _ = headers.get(SET_COOKIE);
-        let body = resp.text().await?;
+        let body = resp.text().await.map_err(Unsent::Network)?;
         Ok((RawResponse { status, body, location }, retry_after, challenge_header))
     }
 
-    /// Sends a request with backoff on 429 / 5xx / network errors. Returns 2xx, 3xx and
-    /// 403 / 404 answers raw; challenges and exhausted retries become errors.
+    /// Sends a request to the web site with backoff on 429 / 5xx / network errors. Returns
+    /// 2xx, 3xx and 403 / 404 answers raw; challenges, the block page and exhausted retries
+    /// become errors.
     pub async fn send(
         &self,
         method: Method,
@@ -350,15 +579,34 @@ impl Transport {
         form: Option<&[(String, String)]>,
         max_retries: u32,
     ) -> Result<RawResponse, ClientError> {
+        self.send_with(method, path_and_query, form, max_retries, Auth::Web).await
+    }
+
+    /// [`Self::send`] for either interface: `auth` tells which, and what the request
+    /// carries. The only way out of the process, for every caller.
+    pub async fn send_with(
+        &self,
+        method: Method,
+        path_and_query: &str,
+        form: Option<&[(String, String)]>,
+        max_retries: u32,
+        auth: Auth,
+    ) -> Result<RawResponse, ClientError> {
+        self.check_route(path_and_query, auth)?;
         let path = parse::url_path(path_and_query).to_string();
         let mut attempt = 0u32;
         loop {
-            let outcome = self.send_once(&method, path_and_query, form).await;
+            let outcome = self.send_once(&method, path_and_query, form, auth).await;
             let (failure, retry_after) = match outcome {
                 Ok((raw, retry_after, challenge_header)) => {
                     let status = raw.status;
                     if challenge_header || (status >= 400 && parse::is_challenge(&raw.body)) {
                         return Err(ClientError::CaptchaRequired);
+                    }
+                    // The block page, on either interface: it is not known whether a block
+                    // covers the web pages too, so it is recognised wherever it is shown.
+                    if app::is_block_page(status, &raw.body, auth != Auth::Web) {
+                        return Err(ClientError::RateLimited { retry_after_secs: Some(self.global.block()) });
                     }
                     if status == 429 {
                         (ClientError::RateLimited { retry_after_secs: retry_after }, retry_after)
@@ -368,7 +616,9 @@ impl Transport {
                         return Ok(raw);
                     }
                 }
-                Err(e) => {
+                // Nothing was sent, and trying again would not change that.
+                Err(Unsent::Refused(e)) => return Err(e),
+                Err(Unsent::Network(e)) => {
                     let kind = if e.is_timeout() {
                         "timeout"
                     } else if e.is_connect() {
@@ -644,7 +894,13 @@ impl Transport {
         raw_body: Option<(String, Vec<u8>)>,
         extra_headers: &[(String, String)],
     ) -> Result<ExploreResponse, ClientError> {
-        self.throttle().await;
+        // The rule of the application interface holds here too: only the login leaves
+        // without an `Authorization` header.
+        let bare = !extra_headers.iter().any(|(name, _)| name.eq_ignore_ascii_case("authorization"));
+        if bare && self.app_route(path_and_query).is_some_and(|route| route != app::LOGIN) {
+            return Err(ClientError::InvalidInput("the application interface of Parfumo is not asked without a session token".into()));
+        }
+        self.throttle(|| Ok(())).await?;
         let mut req = self.http.request(method, self.absolute(path_and_query));
         for (name, value) in extra_headers {
             req = req.header(name.as_str(), value.as_str());
@@ -667,5 +923,107 @@ impl Transport {
             return Err(ClientError::CaptchaRequired);
         }
         Ok(ExploreResponse { status, headers, body })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn transport(base_url: &str) -> Transport {
+        let cfg = ClientConfig { base_url: base_url.into(), ..ClientConfig::default() };
+        Transport::new(cfg, GlobalLimiter::new(0), None, UserLimiter::new()).unwrap()
+    }
+
+    #[test]
+    fn a_path_of_the_application_interface_is_recognised_however_it_is_written() {
+        let t = transport("https://www.parfumo.com");
+        for path in [
+            "/app/v1",
+            "/app/v1/auth/me",
+            "/app/v1/perfumes?page=1",
+            "/APP/V1/auth/me",
+            "/%61pp/v1/auth/me",
+            "/app%2Fv1/auth/me",
+            "//app//v1/auth/me",
+            "/Perfumes/../app/v1/auth/me",
+            "/Perfumes/%2e%2e/app/v1/auth/me",
+        ] {
+            assert!(t.app_route(path).is_some(), "{path}");
+        }
+        assert_eq!(t.app_route("/app/v1/auth/login").as_deref(), Some(app::LOGIN));
+        assert_eq!(t.app_route("/APP/v1//Auth/Login?x=1").as_deref(), Some(app::LOGIN));
+        for path in ["/", "/Perfumes/Dior/Sauvage_Eau_de_Toilette", "/app", "/app/", "/app/v10/x", "/app_v5/api", "/apps/v1", "/Users/app/v1"] {
+            assert_eq!(t.app_route(path), None, "{path}");
+        }
+        // A base address with a path of its own: the interface is under it.
+        let t = transport("http://127.0.0.1:1/site");
+        assert_eq!(t.app_route("/app/v1/auth/me").as_deref(), Some("/auth/me"));
+    }
+
+    #[tokio::test]
+    async fn nothing_goes_to_the_application_interface_without_the_token_except_the_login() {
+        // Port 9 answers nothing: a request that left would end as an upstream error.
+        let t = transport("http://127.0.0.1:9");
+        for path in ["/app/v1/auth/me", "/APP/v1/perfumes", "/x/../app/v1/auth/logout", "/app/v1/auth/login"] {
+            let err = t.send(Method::GET, path, None, 0).await.err();
+            assert!(matches!(err, Some(ClientError::InvalidInput(_))), "{path}: {err:?}");
+        }
+        // The login is the one call without a token, and no other path is a login.
+        let err = t.send_with(Method::POST, "/app/v1/auth/me", None, 0, Auth::Login).await.err();
+        assert!(matches!(err, Some(ClientError::InvalidInput(_))), "{err:?}");
+        let err = t.send_with(Method::POST, "/app/v1/auth/login", None, 0, Auth::Login).await.err();
+        assert!(matches!(err, Some(ClientError::Upstream(_))), "the login is sent: {err:?}");
+        // The token never leaves for a page of the web site, and no call is made without one.
+        t.user.app.restore("tok");
+        let err = t.send_with(Method::GET, "/Perfumes/Dior", None, 0, Auth::Member).await.err();
+        assert!(matches!(err, Some(ClientError::InvalidInput(_))), "{err:?}");
+        t.user.app.forget();
+        assert_eq!(t.send_with(Method::GET, "/app/v1/auth/me", None, 0, Auth::Member).await.err(), Some(ClientError::LoginRequired));
+    }
+
+    #[test]
+    fn a_block_of_the_address_lasts_five_minutes_from_the_first_time_its_page_was_met() {
+        let global = GlobalLimiter::new(0);
+        let start = Instant::now();
+        assert_eq!(global.blocked_secs_at(start), None);
+        assert_eq!(global.block_at(start), 300);
+        assert_eq!(global.blocked_secs_at(start), Some(300));
+        assert_eq!(global.blocked_secs_at(start + Duration::from_millis(100_500)), Some(200), "rounded up: never too short");
+        // Met again before its end (on a web page): what is left of it, not five minutes more.
+        assert_eq!(global.block_at(start + Duration::from_secs(200)), 100);
+        assert_eq!(global.blocked_secs_at(start + Duration::from_secs(299)), Some(1));
+        assert_eq!(global.blocked_secs_at(start + Duration::from_secs(300)), None, "over: the interface is asked again");
+        // Met once it is over: the site still blocks the address, for five minutes again.
+        assert_eq!(global.block_at(start + Duration::from_secs(301)), 300);
+        assert_eq!(global.blocked_secs_at(start + Duration::from_secs(600)), Some(1));
+        assert_eq!(global.blocked_secs_at(start + Duration::from_secs(601)), None);
+    }
+
+    #[test]
+    fn the_session_of_a_user_forgets_exactly_the_token_the_site_refused() {
+        let user = UserLimiter::new();
+        let app = &user.app;
+        app.restore("one");
+        assert!(!user.take_app_session_change(), "a restored token is the one that is stored");
+        // A refusal of the token held: gone, and told to whoever stores the session.
+        app.refuse("one");
+        assert_eq!(app.token(), None);
+        assert!(user.take_app_session_change() && !user.take_app_session_change());
+        // It is never held again, wherever it comes back from.
+        app.restore("one");
+        assert_eq!(app.token(), None);
+        // A late refusal of an old token leaves the new one alone.
+        app.restore("two");
+        app.refuse("one");
+        app.refuse("zero");
+        assert_eq!(app.token().as_deref(), Some("two"));
+        // A limiter for the web pages shares the slot, not the session.
+        assert_eq!(user.web_only().app.token(), None);
+        assert!(Arc::ptr_eq(&user.web_only().next_slot, &user.next_slot));
+        // Dropped by its owner: nothing left to store, and no refusal to renew after.
+        user.forget_app_session();
+        assert_eq!(app.token(), None);
+        assert!(!user.take_app_session_change());
     }
 }

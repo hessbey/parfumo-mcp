@@ -1,0 +1,97 @@
+{
+ "note": {
+  "id": 311,
+  "name": "Bergamot",
+  "nr": 43539,
+  "img": "https://media.parfumo.com/notes_png/ab/ab_4bf90f62ca74630b24f6a16079bdee257c7f677b_1200.png?width=320&aspect_ratio=1:1",
+  "text": "Description of the note.",
+  "categories": [
+   {
+    "id": 37,
+    "name": "Bergamot"
+   },
+   {
+    "id": 401,
+    "name": "Citric notes"
+   }
+  ]
+ },
+ "perfumes": [
+  {
+   "id": "123923",
+   "p_name": "Afternoon Swim",
+   "p_name_url": "Afternoon_Swim",
+   "concentration": "",
+   "gender": "unisex",
+   "url_image_240": "https://media.parfumo.com/perfumes/49/492eeb-afternoon-swim-louis-vuitton_1200.jpg?width=240&aspect_ratio=1:1",
+   "url_image_480": "https://media.parfumo.com/perfumes/49/492eeb-afternoon-swim-louis-vuitton_1200.jpg?width=480&aspect_ratio=1:1",
+   "release_year": "2019",
+   "b_id": "2132",
+   "b_name": "Louis Vuitton",
+   "avg_voting": "86.678",
+   "total_votings": "4037"
+  },
+  {
+   "id": "198567",
+   "p_name": "Sunrise on the Red Sand Dunes",
+   "p_name_url": "sunrise-on-the-red-sand-dunes-eau-de-parfum",
+   "concentration": "Eau de Parfum",
+   "gender": "maennlich",
+   "url_image_240": "https://media.parfumo.com/perfumes/58/58a7da-sunrise-on-the-red-sand-dunes-eau-de-parfum-zara_1200.jpg?width=240&aspect_ratio=1:1",
+   "url_image_480": "https://media.parfumo.com/perfumes/58/58a7da-sunrise-on-the-red-sand-dunes-eau-de-parfum-zara_1200.jpg?width=480&aspect_ratio=1:1",
+   "release_year": "2023",
+   "b_id": "1051",
+   "b_name": "Zara",
+   "avg_voting": "79.951",
+   "total_votings": "3241"
+  },
+  {
+   "id": "5536",
+   "p_name": "Bergamote 22",
+   "p_name_url": "Bergamote_22_Eau_de_Parfum",
+   "concentration": "Eau de Parfum",
+   "gender": "unisex",
+   "url_image_240": "https://media.parfumo.com/perfumes/cb/cbdc98-bergamote-22-eau-de-parfum-le-labo_1200.jpg?width=240&aspect_ratio=1:1",
+   "url_image_480": "https://media.parfumo.com/perfumes/cb/cbdc98-bergamote-22-eau-de-parfum-le-labo_1200.jpg?width=480&aspect_ratio=1:1",
+   "release_year": "2006",
+   "b_id": "586",
+   "b_name": "Le Labo",
+   "avg_voting": "79.205",
+   "total_votings": "805"
+  },
+  {
+   "id": "102281",
+   "p_name": "Sauvage",
+   "p_name_url": "Sauvage_Eau_de_Parfum",
+   "concentration": "Eau de Parfum",
+   "gender": "maennlich",
+   "url_image_240": "https://media.parfumo.com/perfumes/a0/a0ef46-sauvage-eau-de-parfum-dior_1200.jpg?width=240&aspect_ratio=1:1",
+   "url_image_480": "https://media.parfumo.com/perfumes/a0/a0ef46-sauvage-eau-de-parfum-dior_1200.jpg?width=480&aspect_ratio=1:1",
+   "release_year": "2018",
+   "b_id": "28",
+   "b_name": "Dior",
+   "avg_voting": "77.471",
+   "total_votings": "3420"
+  },
+  {
+   "id": "106436",
+   "p_name": "Valentino Donna Rosa Verde",
+   "p_name_url": "Valentino_Donna_Rosa_Verde",
+   "concentration": "",
+   "gender": "weiblich",
+   "url_image_240": "https://media.parfumo.com/perfumes/43/432146-valentino-donna-rosa-verde-valentino_1200.jpg?width=240&aspect_ratio=1:1",
+   "url_image_480": "https://media.parfumo.com/perfumes/43/432146-valentino-donna-rosa-verde-valentino_1200.jpg?width=480&aspect_ratio=1:1",
+   "release_year": "2018",
+   "b_id": "86",
+   "b_name": "Valentino",
+   "avg_voting": "80.519",
+   "total_votings": "472"
+  }
+ ],
+ "total_results": 43561,
+ "page": 1,
+ "per_page": 20,
+ "total_pages": 2179,
+ "gender": "all",
+ "pyramid": "all"
+}

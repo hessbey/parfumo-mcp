@@ -9,9 +9,9 @@ contains only the HTTP server, `parfumo-mcp-server`.
 | --- | --- |
 | Transport | MCP Streamable HTTP on `/mcp`, stateless, `rmcp` 3.9.0. Specification `2026-07-28`, and `2025-11-25` for older clients |
 | Client authentication | One access key per user. It is sent as a bearer token, or typed once on the login page of an OAuth 2.1 client (PKCE S256, protected-resource metadata). No anonymous request on `/mcp` |
-| Parfumo account | Linked per user on the `/link` page, in credentials mode (AES-256-GCM encrypted) or cookie mode |
+| Parfumo account | Linked per user on the `/link` page, in credentials mode (AES-256-GCM encrypted) or cookie mode. In credentials mode, part of the database reads go through the interface of Parfumo's own application |
 | Users | Created on the command line. Cookies, quotas and audit log are isolated per user |
-| Canary | Once a day, a read-only pass over every kind of page on the real site; reports any structure that changed |
+| Canary | Once a day, a read-only pass over every kind of page on the real site; reports any structure that changed. The application interface (`/app/v1`) is only checked when the canary user's account is linked in credentials mode |
 | Health | `GET /healthz`, with the last canary verdict |
 
 > `docker compose up` behind Caddy on a real VPS has not been exercised yet. CI builds the
@@ -34,23 +34,27 @@ docker compose run --rm --no-deps server keygen
 
 # 3. Start
 docker compose up -d
-curl https://<your-domain>/healthz        # {"canary":null,"status":"ok","version":"0.2.3"}
+curl https://<your-domain>/healthz        # {"canary":null,"status":"ok","version":"0.3.0"}
 ```
 
 Nothing is compiled on the server: Compose downloads the published image,
 `ghcr.io/hessbey/parfumo-mcp-server`, built for amd64 and arm64.
 
 - **Version.** Without a setting, the latest release runs. To pin one, add
-  `PARFUMO_MCP_VERSION=0.2.3` to `.env`: an upgrade then only happens when you change it.
-- **Upgrade.** `docker compose pull`, then `docker compose up -d`.
+  `PARFUMO_MCP_VERSION=0.3.0` to `.env`: an upgrade then only happens when you change it.
+- **Upgrade.** `docker compose pull`, then `docker compose up -d`. From 0.2.x to 0.3.0
+  nothing else is needed: the database is upgraded in place at start (four columns are
+  added to the table `parfumo_links`), there is no new setting, and accounts stay linked.
+  An account linked in credentials mode gets its session of the application interface at
+  the user's next tool call, with the stored credentials.
 - **Your own build.** `docker build -t ghcr.io/hessbey/parfumo-mcp-server:local .`, then
   `PARFUMO_MCP_VERSION=local` in `.env`.
 
 Open ports 80 and 443 on the VPS, and only those: the server's port 8080 does not leave the
 Docker network. Then [add a user](#add-a-user).
 
-**Back up the master key.** Without it, stored Parfumo credentials and cookies are
-unreadable and every user must link their account again.
+**Back up the master key.** Without it, stored Parfumo credentials, cookies and session
+tokens are unreadable and every user must link their account again.
 
 The container runs unprivileged: user 10001, read-only file system outside the `/data`
 volume, no Linux capability, 256 MB of memory at most. CI builds the image from
@@ -144,18 +148,46 @@ linked account; without a link they return `not_linked`.
 Each user opens `https://<your-domain>/link`, in English, French or German, and pastes their
 access key. The page asks for the Parfumo login; the other choices are under "More options":
 
-- **Credentials mode** (the main form): Parfumo nickname and password, encrypted on the server. When the
-  session expires, the server logs in again by itself: three attempts at most, then
-  `reauth_required`. A rejected password or a human check stops it at once.
+- **Credentials mode** (the main form): Parfumo nickname or e-mail and password, encrypted
+  on the server. When the session expires, the server logs in again by itself: three
+  attempts at most, then `reauth_required`. A rejected password or a human check stops it
+  at once.
 - **Cookie mode**: the user pastes the `Cookie` header of their logged-in browser; the only
   cookie needed is `pf_auth`. No password on the server. When it expires, tools return
   `reauth_required`. Clicking "Logout" in that browser revokes the cookie.
-- **Test** the link, or **unlink** the account (credentials and cookies erased).
+- **Test** the link, or **unlink** the account (credentials, cookies and session token
+  erased).
+
+**What each mode gives.** The tools are the same in both. In credentials mode the server
+also logs in, with the same credentials, to the interface Parfumo's own application uses
+(`/app/v1`), and reads part of the database through it with that member's own session
+token: the perfume search (by text, brand, exact year, gender), perfume, brand and perfumer
+pages, release-year listings, similar perfumes. Search results then carry each perfume's rating,
+number of ratings and of reviews; every listing read this way carries the perfume's numeric
+id; and that search goes past 1000 results.
+What only the web page shows (a perfume's rank, the country of a brand or of a perfumer) is
+still read there, at the cost of one more request. In cookie mode, as without an account,
+the interface is not used: every read is made on the web pages, as before version 0.3.0. In
+every mode, reviews, statements, fragrance-note pages, the other rankings, the community,
+the collection, the wear log, messages and every write go through the web site, and the web
+site answers whenever the interface refuses the session or cannot answer a read as
+completely. Apart from the login, nothing is sent to the interface without a member's
+token, and a token it refuses is forgotten at once and never sent again: the rules are in
+[Application interface](APP_API.md).
+
+**What is stored for a linked account**, encrypted with the master key and per user: the
+credentials (credentials mode only), the session cookies of the web site and, with them, the
+session token of the application interface (credentials mode only). None of them appears in
+the log, the audit log, a tool result or an error message. The link also records three
+facts about the interface, in clear: that it refused the credentials, that the site ended
+its session, and when that session was last renewed.
 
 If Parfumo rejects the stored password, the server stops trying for that account until it is
-linked again on this page: rejected credentials are never replayed. The server never solves
-a captcha: if Parfumo shows one, the tool returns `captcha_required` and the way out is
-cookie mode.
+linked again on this page: rejected credentials are never replayed. The same holds for the
+application interface: credentials it refuses are not sent to it again until the account is
+linked again, and that user's tools read the web pages meanwhile. Only the server log says
+so, as a warning; `parfumo_session_status` does not. The server never solves a captcha: if
+Parfumo shows one, the tool returns `captcha_required` and the way out is cookie mode.
 
 Nothing is ever typed into the conversation with the assistant or passed as a tool
 parameter. Automated access may lead Parfumo to suspend the linked account; the page says so
@@ -165,3 +197,10 @@ and asks for confirmation.
 
 The canary, what to do when the site changes, audit log, backup and upgrade are covered in
 [MAINTENANCE.md](MAINTENANCE.md) (in French).
+
+The canary user (`PARFUMO_MCP_CANARY_USER`) is a server user linked to a Parfumo test
+account. Link that account in credentials mode: the canary only checks the application
+interface with the session token such an account holds. With a cookie-linked account the
+web pages are still checked, the interface area is reported as not applicable, and nothing
+is sent to `/app/v1`. What the area checks and how to read its lines is in
+[MAINTENANCE.md](MAINTENANCE.md).

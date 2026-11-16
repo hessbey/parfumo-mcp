@@ -1,0 +1,82 @@
+{
+ "popular": [
+  {
+   "id": 1894,
+   "name": "Musk",
+   "nr": 58861,
+   "img": "https://media.parfumo.com/notes_png/9b/9b_5defe06fd0240a8472dddf9cd126f430a07cc270_1200.png?width=120&aspect_ratio=1:1"
+  },
+  {
+   "id": 2871,
+   "name": "Vanilla",
+   "nr": 48297,
+   "img": "https://media.parfumo.com/notes_png/20/20_e4919c28876ee350587aa495191905c26d0a16a9_1200.png?width=120&aspect_ratio=1:1"
+  }
+ ],
+ "categories": [
+  {
+   "id": 5,
+   "name": "Aldehydes",
+   "name_url": "Aldehydes",
+   "nr_of_perfumes": 3029,
+   "sub_categories": [
+    {
+     "id": 485,
+     "name": "Soapy notes",
+     "nr_of_perfumes": 226
+    }
+   ],
+   "top_notes": [
+    {
+     "img": "https://media.parfumo.com/notes_png/c8/c8_7186688cc842283c354c8b067a6cc9f4032c9369_1200.png?width=120&aspect_ratio=1:1"
+    }
+   ]
+  },
+  {
+   "id": 401,
+   "name": "Citric notes",
+   "name_url": "Citric_notes",
+   "nr_of_perfumes": 90667,
+   "sub_categories": [
+    {
+     "id": 37,
+     "name": "Bergamot",
+     "nr_of_perfumes": 47941
+    },
+    {
+     "id": 454,
+     "name": "Bitter orange",
+     "nr_of_perfumes": 2635
+    }
+   ],
+   "top_notes": [
+    {
+     "img": "https://media.parfumo.com/notes_png/ab/ab_4bf90f62ca74630b24f6a16079bdee257c7f677b_1200.png?width=120&aspect_ratio=1:1"
+    }
+   ]
+  },
+  {
+   "id": 304,
+   "name": "Fragrance ingredients",
+   "name_url": "Fragrance_ingredients",
+   "nr_of_perfumes": 17300,
+   "sub_categories": [
+    {
+     "id": 13,
+     "name": "Ambroxan",
+     "nr_of_perfumes": 3834
+    },
+    {
+     "id": 170,
+     "name": "Cashmere wood",
+     "nr_of_perfumes": 4959
+    }
+   ],
+   "top_notes": [
+    {
+     "img": "https://media.parfumo.com/notes_png/c8/c8_7186688cc842283c354c8b067a6cc9f4032c9369_1200.png?width=120&aspect_ratio=1:1"
+    }
+   ]
+  }
+ ]
+}

@@ -12,7 +12,8 @@ your collection, wear log, ratings and reviews, and the community side (messages
 blogs, Souk).
 
 > **Unofficial.** This project is not affiliated with or endorsed by Parfumo. It reads the
-> same pages a browser does, at one request per second. Automated access may still lead
+> same pages a browser does and, for an account linked with its password, the interface of
+> Parfumo's own application, at one request per second. Automated access may still lead
 > Parfumo to suspend the linked account — use it at your own risk.
 
 ## What you get
@@ -32,6 +33,13 @@ blogs, Souk).
 - **Auditable.** Every tool call is logged locally; `parfumo-mcp audit --writes` shows what
   was really written to your account.
 - **Always current.** Every read asks Parfumo: no page is kept to be served again later.
+- **Richer answers with an account linked by password.** When your Parfumo account is linked
+  with its nickname or e-mail and its password, part of the database reads (search, perfume,
+  brand, perfumer, release year, similar perfumes) go through the interface Parfumo's own
+  application uses. Search results then give each perfume's rating and number of ratings,
+  and a search by name, brand or year is no longer limited to 1000 results. Nothing else
+  changes: with an account linked by a browser cookie, or with no account, everything keeps
+  working through the web pages.
 - **Careful with the site.** One request per second per user, random jitter, a fixed and
   honest `User-Agent`. No captcha solving, no Cloudflare bypass.
 - **Targets `www.parfumo.com`, the English site.** The German site `www.parfumo.de` uses
@@ -104,7 +112,8 @@ so: it should pass on **your** words, not write them for you.
 
 ```
 crates/parfumo-client      library: access to the site. Transport, routes and selectors
-                           (one module, src/site.rs), HTML parsing, models
+                           (one module, src/site.rs), HTML parsing, the interface of
+                           Parfumo's application (src/app*.rs), models
 crates/parfumo-mcp-core    library: the 48 tools, Parfumo session, storage, audit log
 crates/parfumo-mcp         local binary: the tools over stdio
 crates/parfumo-mcp-server  hosted binary: the tools over HTTP, with OAuth, users, canary
@@ -114,6 +123,11 @@ npm/                       the npm packages that deliver the local binary (`npx 
 Parfumo is a server-rendered site with no public API, so the client parses HTML. All routes
 and selectors live in one module, the parsers are tested against recorded fixtures, and a
 daily read-only canary on the hosted server reports any page whose structure has changed.
+Since version 0.3.0, part of the database reads of an account linked with its password go
+through the JSON interface of Parfumo's own application, with that member's own session and
+nothing else; the web pages answer everything else, and everything when that interface
+cannot. It is described in [Application interface](docs/APP_API.md); the canary checks it
+when its test account is linked that way.
 
 ## Development
 
