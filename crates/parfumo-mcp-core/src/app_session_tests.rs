@@ -1086,13 +1086,72 @@ async fn a_new_login_to_the_web_site_does_not_store_a_token_another_process_repl
     assert_eq!(logins(site), (2, 2));
 }
 
+/// Runs `test` on a runtime of four threads, and fails when it has not ended after `limit`.
+///
+/// The runtime is built here, and the time is counted on the thread of the test, not by the
+/// runtime. Calls that wait for each other on the locks of `Sessions` (those of `std`, not
+/// of tokio) hold the threads of the runtime: once all four are held no timer of the runtime
+/// fires, and a runtime dropped the usual way waits for its threads without end. The test
+/// would then hang instead of failing. The runtime is left behind instead, with its threads.
+fn on_four_threads(limit: Duration, test: impl Future<Output = ()> + Send + 'static) {
+    let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(4).enable_all().build().unwrap();
+    let (ended, wait) = std::sync::mpsc::channel();
+    let running = runtime.spawn(async move {
+        test.await;
+        let _ = ended.send(());
+    });
+    if wait.recv_timeout(limit) == Err(std::sync::mpsc::RecvTimeoutError::Timeout) {
+        runtime.shutdown_background();
+        panic!("the test did not end within {limit:?}: its calls wait for each other");
+    }
+    // Ended, or panicked (nothing was sent): the task tells which. A failed assertion may
+    // leave calls of its own waiting, which are not waited for either.
+    let outcome = runtime.block_on(running);
+    runtime.shutdown_background();
+    if let Err(panicked) = outcome {
+        std::panic::resume_unwind(panicked.into_panic());
+    }
+}
+
+/// What a deadlock in `Sessions` would look like: every thread of the runtime waits for a
+/// lock of `std`. The limit holds, and the test fails. (Counted by the runtime, with
+/// `tokio::time::timeout`, the limit does not fire while the threads wait.)
+#[test]
+#[should_panic(expected = "did not end within")]
+fn calls_that_wait_for_a_lock_on_every_thread_fail_the_test_instead_of_hanging_it() {
+    on_four_threads(Duration::from_millis(300), async {
+        let lock = std::sync::Arc::new(std::sync::Mutex::new(()));
+        let (held, holding) = (lock.clone(), std::sync::Arc::new(std::sync::Barrier::new(2)));
+        let told = holding.clone();
+        // Held well past the limit, then let go: no thread is left waiting behind the test.
+        std::thread::spawn(move || {
+            let _held = held.lock().unwrap();
+            told.wait();
+            std::thread::sleep(Duration::from_secs(2));
+        });
+        holding.wait();
+        let mut calls = Vec::new();
+        for _ in 0..8 {
+            let lock = lock.clone();
+            calls.push(tokio::spawn(async move { drop(lock.lock().unwrap()) }));
+        }
+        for call in calls {
+            call.await.unwrap();
+        }
+    });
+}
+
 /// Calls of the two processes made together on several threads, public reads and checks
 /// of the account, while the site ends the sessions of both kinds again and again: the
 /// stored session is read and written from both sides in whatever order the threads come.
 /// Every call ends (none is left waiting for a lock), and once it is quiet the two
 /// processes and a new one read with one and the same token, the stored one.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn calls_of_two_processes_made_together_all_end_and_leave_one_session_for_both() {
+#[test]
+fn calls_of_two_processes_made_together_all_end_and_leave_one_session_for_both() {
+    on_four_threads(Duration::from_secs(90), calls_of_two_processes_made_together());
+}
+
+async fn calls_of_two_processes_made_together() {
     let w = World::new().await;
     let site = w.site.clone();
     let (a, b) = two_processes(&w).await;
@@ -1129,13 +1188,11 @@ async fn calls_of_two_processes_made_together_all_end_and_leave_one_session_for_
             }
         })
     };
-    let all = async {
-        for call in calls {
-            call.await.unwrap();
-        }
-        the_site.await.unwrap();
-    };
-    tokio::time::timeout(Duration::from_secs(90), all).await.expect("calls of the two processes never ended");
+    // Calls that never end are met by the limit of the whole test.
+    for call in calls {
+        call.await.unwrap();
+    }
+    the_site.await.unwrap();
 
     // Quiet again. Whatever each process was left with, a few reads settle it.
     end_pauses(&a);
