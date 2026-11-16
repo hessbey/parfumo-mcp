@@ -38,7 +38,7 @@ answer.
 | Perfumer page (`parfumo_get_perfumer`) | `GET /perfumer_details`, only when the number of the perfumer is known: given as a number, or met before in a perfume record or a perfumer page read through the interface. No call finds a perfumer by name | the country, read on the web page of the perfumer: one more request |
 | Release-year listing (`parfumo_get_rankings`, kind year) | `GET /perfumes` with `y_0` and `o=n_asc`, up to the 1000th perfume, where the web page stops | nothing |
 | Similar perfumes and layering (`parfumo_get_similar_perfumes`) | `GET /similar` (`action=list`, `type=similar`, then `type=layer`); `GET /perfume_details/{id}` for the perfume itself and for the addresses the rows do not carry | the dupes directory stays a web page |
-| Own nickname (read by the account tools that need it, such as `parfumo_session_status` and the member's own listings); own ratings of a perfume and own classification votes (read by the rate and classify tools) | `GET /auth/me`, `GET /rating`, `GET /classification` | a rating of zero, a classification the member already voted in and a closed (`locked`) one are left to the web panels |
+| Own nickname (read by the account tools that need it, such as `parfumo_session_status` and the member's own listings); own ratings of a perfume and own classification votes (read by the rate and classify tools) | `GET /auth/me`, `GET /rating`, `GET /classification` | a rating of zero, a classification the member already voted in and a closed (`locked`) one are left to the web panels; an error object under status 200 from `GET /auth/me` leaves the nickname to the account page |
 
 The daily canary checks these reads in an area of its own (`interface`), when the canary
 account is linked in credentials mode: see [MAINTENANCE.md](MAINTENANCE.md).
@@ -79,10 +79,21 @@ in the transport, the one place every request goes through.
    again, also after a restart. Calls made with the token leave one at a time: a call that
    waited behind the refused one finds the token gone and sends nothing. A newer token
    obtained meanwhile is kept. The read that met the refusal is answered by the web site.
+   Nor is it sent again by another process on the same database (the `canary` command run
+   beside the server, a second stdio server): the stored session carries a revision of its
+   own (column `app_rev` of `parfumo_links`). Each process reads it when a tool call
+   starts, and again once the web session was checked; it takes the stored session when
+   another process stored one, and writes its own only over the one it last saw. What
+   remains: a tool call another process had already begun when the refusal was stored
+   may still send the token once; and a refusal is stored when the tool call that met it
+   ends, not before.
 3. **A session the site ended is renewed by one login.** If the renewed session is lost
    again within 15 minutes, no new login is made until those 15 minutes are over. This
-   holds across restarts: it is recorded on the link (columns `app_ended` and
-   `app_renewed_at` of `parfumo_links`).
+   holds across restarts and between processes on one database: it is recorded on the
+   link (columns `app_ended` and `app_renewed_at` of `parfumo_links`), and the 15 minutes
+   run from the latest renewal, whichever process made it. Two processes that find the
+   session ended at the same moment may each log in once; the second keeps the token the
+   first stored.
 4. **Refused credentials are not sent again.** Credentials the interface refuses at login
    are not sent to it again until the account is linked again (column `app_refused`). Two
    answers are recognised as a refusal: a 401 with a JSON body, or a 2xx whose JSON says
@@ -105,7 +116,9 @@ in the transport, the one place every request goes through.
 7. **The two sessions stay apart.** The public client never carries the account's web
    cookies, and the token is never sent to a web page. The token is stored encrypted with
    the session cookies, per user, and never appears in logs, audit rows, tool results or
-   error messages.
+   error messages. A text of the interface that enters an error message or a warning (the
+   message of a 400 or a 422, the words of an error object under status 200) is put on one
+   line, dropped when it repeats the token held, and cut to 200 characters.
 8. **No answer is kept.** Every answer is what Parfumo says now. Only stable identifiers
    are remembered, in memory and bounded: 5,000 perfumes, 1,000 brand references (of at
    most 200 bytes each), 1,000 perfumers. A memory that is full is emptied. One address is
@@ -123,10 +136,15 @@ in the transport, the one place every request goes through.
     page, a 429), when its lookup does not find a reference, when a listing comes without
     its count, when it answers an error object under status 200, or a 404 about a
     record, a brand or a perfumer the web site may still know, and when its answer holds
-    no perfume, brand or perfumer, or another perfume or brand than the one asked. A count
+    no perfume, brand or perfumer, or another perfume or brand than the one asked. The same
+    holds for the similar perfumes of a `Brand/Perfume` reference: when the interface has
+    no record of the perfume, or answers `GET /similar` with a 404 or an error object, the
+    web site answers the whole read, and a number the interface has nothing under any more
+    is forgotten. A count
     that is missing is never read as zero. When the completing web page cannot be read, the answer of the
     interface is returned with a warning (`ranking unavailable: …`,
-    `country unavailable: …`). Any other failure of a call (a 5xx after the retries, an
+    `country unavailable: …`, or `country and founding year unavailable: …` for a brand the
+    interface gave no founding year of). Any other failure of a call (a 5xx after the retries, an
     answer that is not JSON, or a record, a brand or a perfumer that lacks one of its own
     parts: name, address, rows) is reported, as an error
     (`upstream_error`, `parser_outdated`) or as a warning when only a part of the answer

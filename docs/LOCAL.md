@@ -178,7 +178,7 @@ never otherwise.
   same disk as the database: this protection is worth the file permissions, no more.
   Deleting both files resets everything.
 - **Upgrading from 0.2.x** needs nothing: the file is upgraded in place at the first start
-  (three columns are added to the table of the linked account, `parfumo_links`) and the
+  (four columns are added to the table of the linked account, `parfumo_links`) and the
   account stays linked. An account linked in credentials mode gets its session of the
   application interface at the next tool call, with the stored credentials.
 - To switch accounts, link another one on the login page; `parfumo-mcp logout` erases the

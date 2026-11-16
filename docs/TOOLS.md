@@ -75,7 +75,8 @@ Ce qu'un appelant peut voir de différent quand une lecture passe par l'interfac
 - **Fiches** : la marque et les parfumeurs portent leur numéro (`numeric_id`).
 - **Ce que seule la page web montre** (libellé de rang, pays) y est lu, sans le jeton. Si
   cette page ne peut pas être lue, la réponse de l'interface est renvoyée avec un
-  avertissement dans `warnings` (`ranking unavailable: …`, `country unavailable: …`). Les
+  avertissement dans `warnings` (`ranking unavailable: …`, `country unavailable: …`,
+  `country and founding year unavailable: …`). Les
   sorties d'une marque et d'un parfumeur ont pour cela une liste `warnings`, absente quand
   elle est vide.
 - **Rien n'est conservé**, d'un côté comme de l'autre : chaque réponse est ce que Parfumo
@@ -627,8 +628,10 @@ donc une dizaine de secondes, à chaque appel : rien n'est conservé.
 
 **Avec un compte relié en mode identifiants.** Les listes `similar` et `layering` sont lues
 par l'interface de l'application ; l'annuaire des dupes (`dupes`) reste lu sur la page web.
-Si l'interface ne trouve pas le parfum, ou si sa session se termine pendant la lecture, le
-site web répond à tout. Ce qui change dans la réponse :
+Si l'interface ne trouve pas le parfum, n'a plus de fiche ou de liste pour lui (404, objet
+d'erreur sous le statut 200), ou si sa session se termine pendant la lecture, le site web
+répond à tout. Un numéro seul n'a pas de page web : l'erreur de l'interface est alors
+rapportée. Ce qui change dans la réponse :
 
 - chaque parfum de `similar` et de `layering` porte `votes`, et pas seulement ceux dont le
   lien a été résolu ;
@@ -768,7 +771,9 @@ la réponse :
 - chaque parfum porte `p_id` ; `name` est le nom complet (« Sauvage (Eau de Toilette) ») et
   le champ `concentration` est absent ;
 - `warnings`, nouvelle liste facultative, porte `country unavailable: …` quand la page web
-  de la marque n'a pas pu être lue : `country` est alors absent, le reste est renvoyé.
+  de la marque n'a pas pu être lue, ou `country and founding year unavailable: …` quand
+  l'interface n'a pas non plus d'année de fondation : `country` (et `founded` dans le second
+  cas) est alors absent, le reste est renvoyé.
 
 Une référence faite seulement de chiffres est un `id` ou un nom comme un autre (`4711`),
 jamais un numéro de la base de données. Mesuré sur le vrai site le 15 novembre 2026 : mêmes

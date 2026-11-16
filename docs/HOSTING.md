@@ -43,7 +43,7 @@ Nothing is compiled on the server: Compose downloads the published image,
 - **Version.** Without a setting, the latest release runs. To pin one, add
   `PARFUMO_MCP_VERSION=0.3.0` to `.env`: an upgrade then only happens when you change it.
 - **Upgrade.** `docker compose pull`, then `docker compose up -d`. From 0.2.x to 0.3.0
-  nothing else is needed: the database is upgraded in place at start (three columns are
+  nothing else is needed: the database is upgraded in place at start (four columns are
   added to the table `parfumo_links`), there is no new setting, and accounts stay linked.
   An account linked in credentials mode gets its session of the application interface at
   the user's next tool call, with the stored credentials.

@@ -26,11 +26,11 @@ outils dépendent, et vérifie que les analyseurs y trouvent ce qu'ils attendent
 | Heure | `PARFUMO_MCP_CANARY_HOUR`, heure UTC de 0 à 23. Défaut : 4. `off` coupe le canari |
 | Zones | Trois, dans cet ordre : `public` (les pages web, sans jeton), `interface` (les lectures faites par l'interface de l'application, avec le jeton de session du compte de test), `account` (les pages du compte sur le site web, avec ses cookies et sans jeton) |
 | Pages publiques (`public`) | 27 contrôles : recherche, fiche, avis, statements, similaires, marque, parfumeur, note, classements, page libre, forum, communautés, blogs, Souk, profil, mur, avis et liste d'un membre |
-| Interface de l'application (`interface`) | 9 contrôles, seulement si le compte de test est relié en mode identifiants : il détient alors un jeton de session. Pseudo du membre, recherche, fiche, marque, parfumeur, année de sortie, parfums similaires, notes du membre sur un parfum, classification du membre. Les contrôles de la fiche, de la marque et du parfumeur comprennent la lecture de la page web qui complète la réponse (libellé de rang, pays) : un avertissement de cette lecture donne `CHANGED`. Rien n'est demandé à `/app/v1` sans jeton |
+| Interface de l'application (`interface`) | 9 contrôles, seulement si le compte de test est relié en mode identifiants : il détient alors un jeton de session. Pseudo du membre, recherche, fiche, marque, parfumeur, année de sortie, parfums similaires, notes du membre sur un parfum, classification du membre. Les contrôles de la fiche, de la marque et du parfumeur comprennent la lecture de la page web qui complète la réponse (libellé de rang, pays) : une page introuvable ou qui ne se lit plus donne `CHANGED` ; un captcha ou une limitation de débit sur cette page donne `FAILED` et arrête le passage ; une page injoignable (5xx, délai dépassé, réseau) donne `FAILED` et le passage continue. Rien n'est demandé à `/app/v1` sans jeton |
 | Compte de test (`account`) | 21 contrôles de plus si `PARFUMO_MCP_CANARY_USER` nomme un utilisateur du serveur dont le compte Parfumo est relié : listes, export CSV, ports, notes, avis, classification, messagerie, notifications, abonnements, réglages, profil. Tous sont lus sur le site web, sans le jeton : le pseudo, le panneau de notes et le panneau de classification restent ainsi contrôlés par les analyseurs HTML, qui servent les comptes reliés par cookie |
 | Écritures | Aucune. Le canari ne fait que lire |
 | Débit | Celui des outils : une requête par seconde. Une soixantaine de requêtes pour les zones `public` et `account` ; 68 secondes mesurées le 12 novembre 2026. La zone `interface` en ajoute une quinzaine ; sa durée n'a pas été mesurée sur le vrai site |
-| Arrêt | Immédiat sur un captcha ou une limitation de débit : le reste est noté `skipped` |
+| Arrêt | Immédiat sur un captcha ou une limitation de débit, du site web comme de l'interface de l'application (page de blocage, réponse 429, à un appel ou à la connexion, blocage déjà connu du processus) : le contrôle en cours est `FAILED`, le reste est noté `skipped`, zone `account` comprise |
 | Alerte | `PARFUMO_MCP_CANARY_WEBHOOK` : une requête POST en JSON quand le résultat n'est pas `ok`, et une autre quand il redevient `ok`. Le corps porte la même phrase sous `text` et `content` (formats de Slack et de Discord) et la liste des contrôles en cause |
 | Trace | Table `canary_runs` (90 jours), journal du serveur (niveau `ERROR` par contrôle en cause), et `"canary"` dans `/healthz` |
 
@@ -50,7 +50,7 @@ sur ce parfum, l'interface laisse la lecture au panneau du site web, et les cont
 | --- | --- | --- |
 | Relié en mode identifiants, jeton de session détenu, sans note ni vote sur le parfum lu | Les 9 contrôles | 57 contrôles `ok` |
 | Relié par cookie | Une seule ligne, `n/a` (`application session`). Rien n'est envoyé à `/app/v1` | 48 `ok` et 1 `not applicable` ; statut `ok`, pas d'alerte |
-| Relié en mode identifiants, sans jeton | Une seule ligne, `FAILED` (`application session`) : la connexion à l'interface n'a pas donné de jeton (le journal du serveur dit pourquoi), ou n'est pas encore retentée après un échec | Statut `inconclusive`, alerte envoyée |
+| Relié en mode identifiants, sans jeton | Une seule ligne, `FAILED` (`application session`) : la connexion à l'interface n'a pas donné de jeton (le journal du serveur dit pourquoi), ou n'est pas encore retentée après un échec. Si le processus sait l'adresse bloquée, ou si cette connexion reçoit la page de blocage ou un 429, la ligne dit `the application interface asks to wait (…)` et le passage s'arrête : la zone `account` est `skipped` | Statut `inconclusive`, alerte envoyée |
 | Utilisateur du canari sans compte relié | Une seule ligne, `skipped`, en plus de la ligne `FAILED` `account session` de la zone `account` | Statut `inconclusive`, alerte envoyée |
 | Aucun (`PARFUMO_MCP_CANARY_USER` vide, ou `--public-only`) | Pas de zone | 27 contrôles `ok` |
 
@@ -59,8 +59,25 @@ contrôle en cours est `FAILED`. Le jeton est oublié aussitôt, pour le canari 
 outils du même utilisateur, et n'est plus jamais envoyé. Le serveur se reconnecte une fois à
 l'interface, et les contrôles suivants se font avec le nouveau jeton. Un second refus arrête
 la zone : le reste est `skipped`. Sans nouveau jeton, le reste de la zone est `skipped`
-aussi. Le statut est `inconclusive` dans tous ces cas. Une session que le site ferme pendant
-un passage est oubliée dans la base à la fin du passage.
+aussi. Le statut est `inconclusive` dans tous ces cas. Le refus est reconnu même si un appel
+d'outil du même utilisateur a renouvelé la session avant la fin de la lecture. Si le compte
+est relié de nouveau, ou délié, pendant une lecture, ce contrôle est `skipped` (`the account
+was linked again or unlinked while this read ran …`) : la lecture n'est pas jugée. Une
+session que le site ferme pendant un passage est oubliée dans la base à la fin du passage.
+Lancée à la main à côté du serveur, la commande est un autre processus : le refus, puis le
+nouveau jeton, sont enregistrés dans la base, et le serveur les reprend à son appel suivant
+pour cet utilisateur (colonne `app_rev`), sans se reconnecter. Seul un appel d'outil déjà
+commencé dans le serveur au moment du refus peut encore envoyer une fois l'ancien jeton.
+
+**L'interface demande d'attendre pendant un passage.** Si l'interface répond par sa page de
+blocage ou par une limitation de débit (429), ou si le processus sait déjà l'adresse
+bloquée, le contrôle en cours est `FAILED` (`the application interface asks to wait (…)`)
+et le passage s'arrête : plus rien n'est envoyé, ni à l'interface ni au site web, et la zone
+`account` est `skipped`. La réponse que le site web a donnée à la place de l'interface n'est
+pas jugée. Le statut est `inconclusive`. Il en va de même quand le compte n'a pas de jeton
+au début de la zone, ou quand la connexion qui renouvelle la session après un refus reçoit
+un 429 : la ligne `application session`, ou le contrôle en cours, est `FAILED` avec la même
+phrase.
 
 ```sh
 docker compose exec server parfumo-mcp-server canary --last     # dernier rapport enregistré
@@ -70,7 +87,9 @@ docker compose exec server parfumo-mcp-server canary --public-only --json
 
 La commande sort avec le code 0 si le statut du passage est `ok`, 1 sinon. Lancée à la main
 pendant que le serveur tourne, elle a son propre limiteur : elle ajoute au plus une requête
-par seconde à celles du serveur. Ne la lancez pas en boucle.
+par seconde à celles du serveur. Elle partage avec lui la session de l'interface
+enregistrée dans la base : le jeton renouvelé par l'un est repris par l'autre. Ne la lancez
+pas en boucle.
 
 ### Lire un rapport
 
@@ -91,9 +110,9 @@ contrôle `n/a`, elle est celle des versions précédentes.
 | Résultat d'un contrôle | Dans le rapport JSON | Sens | Que faire |
 | --- | --- | --- | --- |
 | `ok` | `"ok"` | La route répond et l'analyseur trouve ce qu'il attend | Rien |
-| `CHANGED` | `"changed"` | La structure a changé : `parser outdated`, page introuvable, ou page lue mais vide de ce qu'elle doit contenir (`parsed, but …`). Dans la zone `interface` : aussi une lecture que l'interface n'a pas servie elle-même, ou un avertissement de la page web qui complète sa réponse | Section 2 |
-| `FAILED` | `"failed"` | Pas de verdict : Parfumo injoignable, captcha, limitation, session du compte refusée, jeton de l'interface refusé, ou compte relié en mode identifiants sans jeton | Section 3 |
-| `skipped` | `"skipped"` | Non lancé : il dépend d'un contrôle qui n'a pas passé, ou le passage (ou la zone) a été arrêté | Réparer d'abord le contrôle dont il dépend |
+| `CHANGED` | `"changed"` | La structure a changé : `parser outdated`, page introuvable, ou page lue mais vide de ce qu'elle doit contenir (`parsed, but …`). Dans la zone `interface` : aussi une lecture que l'interface n'a pas servie elle-même, ou une page web qui complète sa réponse devenue introuvable ou illisible (avertissement `ranking unavailable…`, `country unavailable…`) | Section 2 |
+| `FAILED` | `"failed"` | Pas de verdict : Parfumo injoignable, captcha, limitation (du site web, d'une page web qui complète une réponse de l'interface, ou de l'interface elle-même : page de blocage, 429), session du compte refusée, jeton de l'interface refusé, ou compte relié en mode identifiants sans jeton | Section 3 |
+| `skipped` | `"skipped"` | Non lancé : il dépend d'un contrôle qui n'a pas passé, ou le passage (ou la zone) a été arrêté. Ou lancé mais non jugé : le compte a été relié de nouveau pendant la lecture | Réparer d'abord le contrôle dont il dépend |
 | `n/a` | `"not_applicable"` | Ne s'applique pas au compte tel qu'il est : relié par cookie, il n'a pas de jeton de session ; avec une note de zéro ou un vote de classification sur le parfum lu, l'interface laisse cette lecture au panneau du site web, lu dans la zone `account`. C'est l'état durable d'une installation saine | Rien. Pour que l'interface soit contrôlée : relier le compte en mode identifiants, sans note ni vote sur ce parfum |
 
 Statut du passage : `changed` dès qu'un contrôle est `CHANGED` ; sinon `inconclusive` s'il
@@ -133,6 +152,11 @@ revient vide alors qu'elle ne devrait pas.
    `forum_fixtures.rs`, `market_fixtures.rs`, `social_fixtures.rs`).
 5. **Vérifier** : `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D
    warnings`, `cargo fmt --all --check`, puis `parfumo-mcp-server canary` contre le vrai site.
+   Les tests à plusieurs threads de `app_session_tests.rs` passent par `on_four_threads` :
+   leur limite de temps est comptée sur le thread du test, parce qu'un
+   `tokio::time::timeout` ne se déclenche pas quand tous les threads du runtime attendent un
+   verrou `std`. En CI, chaque job de test est arrêté au bout de 30 minutes
+   (`timeout-minutes`).
 6. **Noter le changement** dans `docs/DISCOVERY.md` (une ligne : ce qui était écrit, ce qui
    est mesuré) et déployer (section 5).
 
@@ -162,15 +186,18 @@ Trois points propres à cette zone :
 
 - **Le détail dit de quel côté est le changement.** `parser outdated: /app/v1/…` ou
   `parsed, but …` sur une partie de la réponse : la forme de la réponse de l'interface a
-  changé. `the reader warns: ranking unavailable…` ou `country unavailable…` : c'est la page
-  web qui complète la réponse (fiche, marque, parfumeur) qui n'a pas pu être lue ; la
-  correction est alors celle d'une page web, dans `site.rs`. `the application interface did
+  changé. `the reader warns: ranking unavailable…`, `country unavailable…` ou `country and
+  founding year unavailable…` : la page web qui complète la réponse (fiche, marque,
+  parfumeur) est introuvable ou ne se lit plus ; la correction est alors celle d'une page
+  web, dans `site.rs`. Un captcha, une limitation ou une panne sur cette page ne donne pas
+  cet avertissement dans le canari : le contrôle est `FAILED`, avec l'erreur de la page. `the application interface did
   not answer this read (the web site did), or its answer changed` : la réponse est venue du
   site web à la place de l'interface, ou la réponse de l'interface n'a plus ce qui la
   distingue (numéro du parfum dans chaque ligne, numéro de la marque dans la fiche, votes de
-  chaque parfum similaire). L'interface laisse une lecture au site web quand elle demande
-  d'attendre (adresse bloquée, voir la section 3) ou quand sa recherche ne trouve pas la
-  référence : vérifiez cela avant de toucher au code.
+  chaque parfum similaire). L'interface laisse une lecture au site web quand sa recherche
+  ne trouve pas la référence : vérifiez cela avant de toucher au code. Quand elle demande
+  d'attendre (adresse bloquée, 429), le canari ne juge pas la lecture : le contrôle est
+  `FAILED` et le passage s'arrête (section 3).
 - **Les fixtures** sont les fichiers `crates/parfumo-client/tests/fixtures/app_*.json`,
   lus par `tests/app_db.rs`, `app_brand.rs`, `app_perfumer.rs`, `app_rankings.rs`,
   `app_similar.rs` et `app_own.rs`. Le changement se note dans `docs/APP_API.md`, pas dans
@@ -219,10 +246,11 @@ Terminez par `explore req GET /api/account/logout` et supprimez `/tmp/parfumo-ex
 | `reauth_required`, statut `login_failed` | Trois connexions de suite ont échoué sans refus du mot de passe (Parfumo indisponible). Nouvel essai automatique après 15 minutes | Attendre ; vérifier que parfumo.com répond |
 | `rate_limited` avec un délai | Plafond quotidien d'écriture publique du serveur, ou 429 de Parfumo | Respecter le délai. Ne pas relever le débit : une requête par seconde par utilisateur, deux au total |
 | `rate_limited` avec un délai en secondes, 300 au plus, sur une lecture | Parfumo bloque l'adresse du serveur : sa page de blocage (« Access Denied … try again in … », statut 404) a été rencontrée. Pendant cinq minutes à partir de la première rencontre, et pour tous les utilisateurs du processus, plus rien n'est envoyé à `/app/v1`, connexion comprise : les lectures passent par les pages web, sans erreur pour l'utilisateur. L'erreur `rate_limited` n'apparaît que si une page web montre elle aussi la page de blocage ; elle donne alors les secondes restantes | Attendre la fin du délai, sans rien relancer. Quand ce blocage a été observé, il suivait des requêtes vers `/app/v1` sans jeton valide |
-| Canari, zone `interface` : `CHANGED` avec `the application interface did not answer this read (the web site did), or its answer changed` | L'interface a laissé la lecture au site web (blocage en cours, recherche sans résultat), ou sa réponse a changé | Relancer un passage plus tard, une fois. Si le détail revient : section 2 |
-| Journal du serveur, niveau `WARN` : `the application interface refused the credentials: the web pages are used until the account is linked again` | L'interface de l'application a refusé l'identifiant et le mot de passe à sa connexion. Ils ne lui sont plus envoyés, redémarrage compris (colonne `app_refused` de `parfumo_links`). Le compte reste relié et les outils lisent les pages web. `parfumo_session_status` ne le montre pas : seul ce journal le dit. Si c'est le compte du canari : ligne `FAILED` `application session` | L'utilisateur relie son compte à nouveau sur `/link` |
+| Canari, zone `interface` : `CHANGED` avec `the application interface did not answer this read (the web site did), or its answer changed` | L'interface a laissé la lecture au site web (recherche sans résultat), ou sa réponse a changé | Relancer un passage plus tard, une fois. Si le détail revient : section 2 |
+| Canari, zone `interface` : `FAILED` avec `the application interface asks to wait (the site blocks the address of this server)` ou `(it rate limited a call)`, sur un contrôle ou sur la ligne `application session`, le reste `skipped` avec `run stopped after …: the application interface asks to wait` | L'interface a répondu par sa page de blocage ou par une limitation de débit (429), à un appel ou à la connexion, ou le processus savait déjà l'adresse bloquée. Le canari n'a plus rien envoyé | Attendre la fin du blocage (cinq minutes), sans rien relancer, puis relancer un passage, une fois |
+| Journal du serveur, niveau `WARN` : `the application interface refused the credentials: the web pages are used until the account is linked again` | L'interface de l'application a refusé l'identifiant et le mot de passe à sa connexion. Ils ne lui sont plus envoyés, redémarrage compris (colonne `app_refused` de `parfumo_links`). Le compte reste relié et les outils lisent les pages web. `parfumo_session_status` ne le montre pas : seul ce journal le dit. Si c'est le compte du canari : ligne `FAILED` `application session` (avec `the application interface asks to wait…` tant qu'un blocage de l'adresse est connu du processus) | L'utilisateur relie son compte à nouveau sur `/link` |
 | Journal du serveur, niveau `WARN` : `no session of the application interface: the web pages are used instead` | La connexion à l'interface a échoué sans refus des identifiants (panne, réponse 400, 403, 404 ou 422, réponse sans jeton). Nouvel essai au premier appel d'outil après 15 minutes | Attendre. Les outils lisent les pages web entre-temps |
-| Journal du serveur, niveau `WARN` : `the renewed session of the application interface was refused: the web pages are used for a while` | Une session renouvelée après un refus a été refusée de nouveau dans les 15 minutes. Aucune nouvelle connexion à l'interface avant la fin de ce délai, redémarrage compris (colonnes `app_ended` et `app_renewed_at`) | Attendre : le serveur réessaie seul après ce délai. Les outils lisent les pages web entre-temps |
+| Journal du serveur, niveau `WARN` : `the renewed session of the application interface was refused: the web pages are used for a while` | Une session renouvelée après un refus a été refusée de nouveau dans les 15 minutes. Aucune nouvelle connexion à l'interface avant la fin de ce délai, redémarrage compris (colonnes `app_ended` et `app_renewed_at`), et quel que soit le processus qui a renouvelé la session | Attendre : le serveur réessaie seul après ce délai. Les outils lisent les pages web entre-temps |
 | `upstream_error` répété | Parfumo en panne, ou 403 | `canary --public-only` dit si le site répond encore au serveur |
 
 Le serveur ne contourne rien : pas de rotation d'adresse, pas de résolution de captcha, pas
@@ -283,8 +311,8 @@ soi-même, voir [HOSTING.md](HOSTING.md#install).
 
 Le schéma de la base se met à jour seul au démarrage. Les sessions Parfumo et les jetons
 OAuth survivent au redémarrage. De la 0.2.x à la 0.3.0, rien d'autre n'est à faire : la
-base est mise à niveau sur place (trois colonnes ajoutées à la table `parfumo_links` :
-`app_refused`, `app_ended`, `app_renewed_at`), il n'y a ni nouveau réglage ni nouvelle
+base est mise à niveau sur place (quatre colonnes ajoutées à la table `parfumo_links` :
+`app_refused`, `app_ended`, `app_renewed_at`, `app_rev`), il n'y a ni nouveau réglage ni nouvelle
 variable d'environnement, et les comptes restent reliés. Un compte relié en mode
 identifiants reçoit sa session de l'interface de l'application au premier appel d'outil.
 
