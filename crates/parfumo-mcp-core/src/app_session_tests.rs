@@ -1086,6 +1086,41 @@ async fn a_new_login_to_the_web_site_does_not_store_a_token_another_process_repl
     assert_eq!(logins(site), (2, 2));
 }
 
+#[tokio::test]
+async fn an_account_tool_that_waited_for_the_web_site_does_not_send_a_token_refused_meanwhile() {
+    let w = World::new().await;
+    let site = &w.site;
+    let (a, b) = two_processes(&w).await;
+
+    // The site ends the session. An account tool of one process checks its web session
+    // first, about which the site is slow to answer: it holds the token all that time.
+    // Meanwhile the other process meets the refusal of the token, stores it, and renews
+    // the session (asked directly, so that it does not wait for the web site).
+    site.app_live.lock().unwrap().clear();
+    site.web_delay_ms.store(400, Ordering::SeqCst);
+    let meanwhile = async {
+        while site.seen.lock().unwrap().is_empty() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        let account = a.state.sessions.client_for(w.user).unwrap();
+        assert_eq!(account.app_nick().await.unwrap_err(), ClientError::LoginRequired);
+        a.state.sessions.store_app_session(w.user);
+        a.state.sessions.open_app_session(w.user).await;
+        assert!(account.has_app_session());
+    };
+    let (nick, ()) = tokio::join!(b.own_nick(), meanwhile);
+    site.web_delay_ms.store(0, Ordering::SeqCst);
+    assert_eq!(nick, "alice");
+    // The link is read again once the web site has answered: the tool reads with the
+    // renewed token, and the refused one, whose refusal was stored by then, stays in.
+    assert_eq!(
+        asked(site).1,
+        [call("/auth/me", "app-alice-1"), login(), call("/auth/me", "app-alice-2")],
+        "a token whose refusal another process had stored left again after the wait for the web site"
+    );
+    assert_eq!(logins(site), (1, 2));
+}
+
 /// One process has a login to the interface under way, and meanwhile finds that the stored
 /// session changed and holds no token. The login answers at the very instant the stored
 /// session is taken: after the row was read, before it is decided what becomes of the token

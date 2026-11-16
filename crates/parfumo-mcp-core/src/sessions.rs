@@ -557,6 +557,11 @@ impl Sessions {
         }
         match client.is_logged_in().await {
             Ok(true) => {
+                // The probe waited for its turn and for the site. Another process may have
+                // stored the refusal of the token held here, or a renewed one, meanwhile:
+                // the link is read again, so that the tool does not send a token whose
+                // refusal is already in the database.
+                self.follow(user_id)?;
                 if app_login_possible(&link) {
                     self.ensure_app_session(user_id, &client, &link.rev).await;
                 }
