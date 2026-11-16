@@ -58,6 +58,8 @@ fn namesakes() -> String {
 struct Site {
     /// Path and query of every request, in order.
     asked: Mutex<Vec<String>>,
+    /// What the web page of a perfumer answers instead of the page: a status and a body.
+    web: Mutex<Option<(u16, &'static str)>>,
 }
 
 async fn handler(State(site): State<Arc<Site>>, uri: Uri, headers: HeaderMap, _body: String) -> Response {
@@ -65,7 +67,8 @@ async fn handler(State(site): State<Arc<Site>>, uri: Uri, headers: HeaderMap, _b
     site.asked.lock().unwrap().push(asked.clone());
     let json = |text: &str| (StatusCode::OK, [(header::CONTENT_TYPE, "application/json")], text.to_string()).into_response();
     if uri.path().starts_with("/Perfumers/") {
-        return (StatusCode::OK, [(header::CONTENT_TYPE, "text/html; charset=utf-8")], PERFUMER_PAGE).into_response();
+        let (status, page) = site.web.lock().unwrap().unwrap_or((200, PERFUMER_PAGE));
+        return (StatusCode::from_u16(status).unwrap(), [(header::CONTENT_TYPE, "text/html; charset=utf-8")], page).into_response();
     }
     if uri.path() == "/app/v1/auth/login" {
         return json(r#"{"status":"success","auth_token":"tok"}"#);
@@ -250,6 +253,37 @@ async fn a_perfumer_the_interface_has_nothing_about_or_does_not_count_is_left_to
         assert_eq!((p.perfumer.numeric_id, p.country.as_deref()), (Some(131), Some("France")), "the page of the web site");
     }
     assert!(c.has_app_session(), "none of this is a refusal of the session");
+}
+
+/// The country is read on the web page of the perfumer. When that page cannot be read, the
+/// perfumer of the interface is given all the same and says what it lacks; the error of
+/// the page is handed back as it is to who asks for it, not as the words of the warning.
+#[tokio::test]
+async fn the_error_of_the_page_that_completes_a_perfumer_is_handed_back_beside_the_warning() {
+    let (c, site) = client(true).await;
+    let read = c.get_perfumer_completed("509", 1).await.unwrap();
+    assert_eq!((read.value.country.as_deref(), read.web_error), (Some("France"), None), "the page was read");
+
+    // A page that does not exist, and a human verification (the page of Cloudflare, by its title).
+    let challenge = "<html><head><title>Just a moment...</title></head></html>";
+    for (answer, error) in
+        [((404, "<html><body>Not found</body></html>"), ClientError::NotFound(WEB_PAGE.into())), ((403, challenge), ClientError::CaptchaRequired)]
+    {
+        *site.web.lock().unwrap() = Some(answer);
+        let read = c.get_perfumer_completed("509", 1).await.unwrap();
+        assert_eq!(read.web_error.as_ref(), Some(&error));
+        assert_eq!((read.value.country.as_deref(), read.value.perfumes.items.len()), (None, 5));
+        assert_eq!(read.value.warnings, [format!("country unavailable: {error}")]);
+        assert_eq!(c.get_perfumer("509", 1).await.unwrap(), read.value, "the tools get the same answer, with the same warning");
+    }
+
+    // Without a session the web page is the read itself: its failure is the error of the read.
+    let (c, site) = client(false).await;
+    *site.web.lock().unwrap() = Some((403, challenge));
+    assert_eq!(c.get_perfumer_completed("509", 1).await.unwrap_err(), ClientError::CaptchaRequired);
+    *site.web.lock().unwrap() = None;
+    let read = c.get_perfumer_completed("509", 1).await.unwrap();
+    assert_eq!((read.value.perfumer.numeric_id, read.web_error), (Some(131), None));
 }
 
 #[tokio::test]

@@ -13,6 +13,7 @@ use serde_json::Value;
 
 use crate::{
     ClientError, ParfumoClient,
+    app::passed_on,
     models::{ClassGroup, ClassShare, EntityRef, Gender, Listing, NotePyramid, PerfumeDetails, PerfumeSummary, RatingScore, SearchQuery},
     site::routes,
 };
@@ -107,20 +108,27 @@ enum Unserved {
     Refused(String),
 }
 
-/// As many characters of a refusal as are passed on.
-const MAX_REFUSAL_CHARS: usize = 200;
-
-/// The refusal an answer is, when it is one: the interface words some of them in JSON under
-/// status 200 (`{"error": "Brand not found"}`, `{"status": "error", …}`).
-fn refusal(answer: &Value) -> Option<Unserved> {
+/// Whether an answer is an error object: the interface words some of its refusals in JSON
+/// under status 200 (`{"error": "Brand not found"}`, `{"status": "error", …}`).
+pub(crate) fn is_refusal(answer: &Value) -> bool {
     let error = answer.get("error").is_some_and(|e| !matches!(e, Value::Null | Value::Bool(false)) && e.as_str() != Some(""));
-    if !error && text(answer, "status").as_deref() != Some("error") {
+    error || text(answer, "status").as_deref() == Some("error")
+}
+
+/// The refusal an answer is, when it is one. Its words end in an error message: they are
+/// kept as every text of the interface is (`passed_on`), and not at all when they repeat
+/// the session token held (`token`).
+fn refusal(answer: &Value, token: Option<&str>) -> Option<Unserved> {
+    if !is_refusal(answer) {
         return None;
     }
     let words = ["message", "error"].iter().find_map(|key| text(answer, key)).unwrap_or_default();
-    // On one line and of a bounded length: these words end in an error message.
-    let words: String = words.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(MAX_REFUSAL_CHARS).collect();
-    Some(if words.to_lowercase().contains("not found") { Unserved::Absent } else { Unserved::Refused(words) })
+    // An absence is read in the words as far as they would be shown, whatever else they
+    // repeat: none of them is passed on.
+    if passed_on(&words, None).to_lowercase().contains("not found") {
+        return Some(Unserved::Absent);
+    }
+    Some(Unserved::Refused(passed_on(&words, token)))
 }
 
 /// Whether a part of an answer holds nothing: absent in all but name.
@@ -144,6 +152,12 @@ fn no_record(p_id: u64, why: Unserved) -> ClientError {
         Unserved::Refused(words) if words.is_empty() => ClientError::Upstream(format!("{path} was refused")),
         Unserved::Refused(words) => ClientError::Upstream(format!("{path} was refused: {words}")),
     }
+}
+
+/// Whether a reference to a perfume is its bare number: the one reference that has no web
+/// page behind it, so that what the interface answers about it is the last word.
+pub(crate) fn is_bare_number(reference: &str) -> bool {
+    reference.trim().chars().all(|c| c.is_ascii_digit())
 }
 
 /// Adds to a memory of identifiers that must stay bounded: once full it is emptied, and
@@ -317,12 +331,9 @@ impl ParfumoClient {
     /// a refusal worded in JSON under status 200.
     async fn app_answer(&self, path: &str, params: &[(String, String)]) -> Result<Result<Value, Unserved>, ClientError> {
         match self.app_get(path, params).await {
-            Ok(answer) => Ok(match refusal(&answer) {
-                // The words of a refusal end in an error message, where the session token
-                // must never be: words that repeat it are not passed on.
-                Some(Unserved::Refused(words)) if self.t.user.app.token().is_some_and(|token| !token.is_empty() && words.contains(&token)) => {
-                    Err(Unserved::Refused(String::new()))
-                }
+            // The words of a refusal end in an error message, where the session token
+            // must never be: words that repeat it are not passed on.
+            Ok(answer) => Ok(match refusal(&answer, self.t.user.app.token().as_deref()) {
                 Some(why) => Err(why),
                 None => Ok(answer),
             }),
@@ -416,9 +427,15 @@ impl ParfumoClient {
     /// alone tells whether it exists, and a refusal about something else is reported as one.
     pub(crate) async fn app_perfume_record(&self, reference: &str) -> Result<Option<PerfumeDetails>, ClientError> {
         let Some(p_id) = self.app_perfume_number(reference).await? else { return Ok(None) };
+        self.app_perfume_record_under(reference, p_id).await
+    }
+
+    /// [`Self::app_perfume_record`] for a reference whose number (`p_id`) was already
+    /// looked up: the lookup is not made twice.
+    pub(crate) async fn app_perfume_record_under(&self, reference: &str, p_id: u64) -> Result<Option<PerfumeDetails>, ClientError> {
         match self.app_perfume_by_number(p_id).await? {
             Ok(record) => Ok(Some(record)),
-            Err(why) if reference.trim().chars().all(|c| c.is_ascii_digit()) => Err(no_record(p_id, why)),
+            Err(why) if is_bare_number(reference) => Err(no_record(p_id, why)),
             Err(Unserved::Absent) => {
                 self.t.perfume_ids.lock().unwrap_or_else(|e| e.into_inner()).retain(|_, (number, _)| *number != p_id);
                 Ok(None)
@@ -656,8 +673,8 @@ mod tests {
 
     use serde_json::{Value, json};
 
-    use super::{MAX_PERFUMES, MAX_REFUSAL_CHARS, Unserved, plain, refusal, remember};
-    use crate::{ClientConfig, GlobalLimiter, ParfumoClient};
+    use super::{MAX_PERFUMES, Unserved, plain, refusal, remember};
+    use crate::{ClientConfig, GlobalLimiter, ParfumoClient, app::MAX_PASSED_ON};
 
     fn client() -> ParfumoClient {
         ParfumoClient::new(ClientConfig::default(), GlobalLimiter::new(0), None).unwrap()
@@ -739,17 +756,23 @@ mod tests {
 
     #[test]
     fn a_refusal_is_an_absence_only_when_it_says_not_found() {
-        assert_eq!(refusal(&json!({"p": {}, "b": {}})), None);
-        assert_eq!(refusal(&json!({"status": "success", "error": null})), None);
+        let refusal = |answer: Value| refusal(&answer, Some("tok-1"));
+        assert_eq!(refusal(json!({"p": {}, "b": {}})), None);
+        assert_eq!(refusal(json!({"status": "success", "error": null})), None);
         // The refusal recorded for a brand the interface does not have.
-        assert_eq!(refusal(&json!({"error": "Brand not found"})), Some(Unserved::Absent));
-        assert_eq!(refusal(&json!({"status": "error", "message": "Perfume Not Found"})), Some(Unserved::Absent));
-        assert_eq!(refusal(&json!({"status": "error", "message": "Invalid type"})), Some(Unserved::Refused("Invalid type".into())));
-        assert_eq!(refusal(&json!({"error": true})), Some(Unserved::Refused(String::new())));
+        assert_eq!(refusal(json!({"error": "Brand not found"})), Some(Unserved::Absent));
+        assert_eq!(refusal(json!({"status": "error", "message": "Perfume Not Found"})), Some(Unserved::Absent));
+        assert_eq!(refusal(json!({"status": "error", "message": "Invalid type"})), Some(Unserved::Refused("Invalid type".into())));
+        assert_eq!(refusal(json!({"error": true})), Some(Unserved::Refused(String::new())));
         // Its words end in an error message: on one line, and not a page of them.
-        let long = refusal(&json!({"error": format!("Too\n busy {}", "x".repeat(1_000))}));
+        let long = refusal(json!({"error": format!("Too\n busy {}", "x".repeat(1_000))}));
         let Some(Unserved::Refused(words)) = long else { panic!("{long:?}") };
-        assert!(words.starts_with("Too busy x") && words.chars().count() == MAX_REFUSAL_CHARS, "{words}");
+        assert!(words.starts_with("Too busy x") && words.chars().count() == MAX_PASSED_ON, "{words}");
+        // Words that repeat the session token are not passed on, also when it stands past
+        // what is kept of them. An absence stays one: none of its words is passed on.
+        let past = refusal(json!({"error": format!("Too busy {} tok-1", "x".repeat(1_000))}));
+        assert_eq!(past, Some(Unserved::Refused(String::new())));
+        assert_eq!(refusal(json!({"error": "Nothing for tok-1: perfume not found"})), Some(Unserved::Absent));
     }
 
     #[test]

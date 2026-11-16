@@ -14,7 +14,8 @@
 //!   canary account, as for every user whose account is linked. Nothing is asked of the
 //!   interface without a token: an account linked by the cookie of a browser has none, and
 //!   the area then does not apply to it. A token the interface refuses is a failed check and
-//!   is not sent again; the area goes on only if the account obtains another, once;
+//!   is not sent again; the area goes on only if the account obtains another, once. An
+//!   interface that asks to wait (its block page, a 429) stops the run, as the web site does;
 //! - `account`: the pages of the canary account on the web site, by a client that holds
 //!   the web session of the account and no token, so that the nickname, the rating panel
 //!   and the classification panel are read on the web site too.
@@ -22,7 +23,7 @@
 use std::{future::Future, time::Instant};
 
 use parfumo_client::{
-    BlogFeed, ClientError, Listing, ParfumoClient, PerfumeDetails, PerfumeSummary, RankingKind, ReviewSort, SearchQuery, SettingsPage,
+    BlogFeed, ClientError, Completed, Listing, ParfumoClient, PerfumeDetails, PerfumeSummary, RankingKind, ReviewSort, SearchQuery, SettingsPage,
     SimilarOptions, SimilarPerfumes, SoukKind, TextKind, site::routes,
 };
 use serde::{Deserialize, Serialize};
@@ -59,7 +60,8 @@ pub enum Outcome {
     Changed,
     /// No verdict: Parfumo was unreachable, refused, or the account session is gone.
     Failed,
-    /// Not run (an earlier check it depends on did not pass, or the run was stopped).
+    /// Not run (an earlier check it depends on did not pass, or the run was stopped), or
+    /// run and not judged: the account was linked again while the read was under way.
     Skipped,
     /// Not run because it does not apply to the canary account as it is: linked by the
     /// cookie of a browser, it holds no session token of the application interface; with a
@@ -146,7 +148,8 @@ pub use parfumo_mcp_core::audit::db_time;
 #[derive(Default)]
 struct Runner {
     checks: Vec<Check>,
-    /// Set by a captcha or a rate limit: nothing more is sent.
+    /// Set by a captcha or a rate limit, of the web site or of the application interface:
+    /// nothing more is sent.
     stop: Option<String>,
     /// Set when the account session is unusable: the account checks are skipped.
     account_stop: Option<String>,
@@ -238,9 +241,13 @@ impl Runner {
     /// cookie of the account and is lent its session token for the time of the read.
     ///
     /// The client reads the web site instead whenever the interface does not serve a read,
-    /// and after the interface refused the token (which the client then forgets). Neither
-    /// may pass for an answer of the interface: `expect` looks for what only the interface
-    /// fills, and a session the site ended by the time the read is over is a refusal.
+    /// after the interface refused the token (which the client then forgets), and when the
+    /// interface asks to wait. None of these may pass for an answer of the interface:
+    /// `expect` looks for what only the interface fills, and what became of the session
+    /// while the read ran is told by what the client counts, read before and after it.
+    ///
+    /// An interface that asks to wait (its block page, a 429) stops the run, like a rate
+    /// limit of the web site: see [`Self::interface_asks_to_wait`].
     ///
     /// A refusal is one failed check, and the refused token is not sent again: the account
     /// forgets it too. The next read is lent whatever the account holds then. That is a new
@@ -248,6 +255,9 @@ impl Runner {
     /// user: a token that did not live until this run then costs one check, not the area.
     /// A second refusal ends the area: two refused requests in a row are what the site was
     /// seen to answer by blocking the address.
+    ///
+    /// A session its owner dropped while the read ran (the account was linked again, or
+    /// unlinked) is not a refusal, and the read is not judged: the check is skipped.
     ///
     /// `web_panel`: the panel of the web site this read is left to for some accounts. The
     /// client carries no web session, so the panel answers it nothing: the check then does
@@ -266,8 +276,27 @@ impl Runner {
             self.skip(A, name, function, &why);
             return None;
         }
-        // Without a token the read would go to the web site under the name of the interface.
-        if !lent.lend().await {
+        let c = &lent.client;
+        // Read before the session is opened: the login that renews it after a refusal is a
+        // call of the interface too, and one answered 429 leaves no other trace.
+        let waits = c.app_waits();
+        let held = lent.lend().await;
+        // The interface asked to wait before the read: a block known from an earlier call of
+        // any user of the process, or what the login just made was answered. The read would
+        // go to the web site under the name of the interface.
+        let blocked = c.app_blocked();
+        if blocked || c.app_waits() != waits {
+            self.interface_asks_to_wait(name, function, blocked, None);
+            return None;
+        }
+        // Events are counted, where a state would be read too late: a tool call of the same
+        // user that logs in again before this read is over leaves no trace of the refusal
+        // in the state of the session.
+        let (refusals, generation) = (c.app_session_refusals(), c.app_session_generation());
+        // The token is looked for again once the counts are read: one refused or dropped
+        // from here on is counted, and one that went between the two is not lent. Without a
+        // token the read would go to the web site under the name of the interface.
+        if !held || !c.has_app_session() {
             let why = match &self.refused_at {
                 Some(at) => format!(
                     "the application interface refused the session token at `{at}`, and the account obtained no other: nothing more is asked of it"
@@ -280,10 +309,17 @@ impl Runner {
         }
         let started = Instant::now();
         let answer = read.await;
-        // The site ended the session while this read ran. A session its owner dropped (the
-        // account was linked again meanwhile) is not a refusal.
-        let refused = lent.client.app_session_ended();
+        // The site refused the token while this read ran, whatever became of the session
+        // since. A session its owner dropped (the account was linked again meanwhile) is not
+        // a refusal.
+        let refused = c.app_session_refusals() != refusals;
+        let dropped = c.app_session_generation() != generation;
         lent.give_back();
+        let blocked = c.app_blocked();
+        if blocked || c.app_waits() != waits {
+            self.interface_asks_to_wait(name, function, blocked, Some(started));
+            return None;
+        }
         if refused {
             match &self.refused_at {
                 None => self.refused_at = Some(name.to_string()),
@@ -303,13 +339,22 @@ impl Runner {
                 Ok(_) => false,
             };
         match answer {
-            // A captcha or a rate limit stops the whole run, whichever side met it.
+            // A captcha or a rate limit of the web site stops the whole run as well, on the
+            // page that completes the read or on the one read in place of the interface.
             Err(e @ (ClientError::CaptchaRequired | ClientError::RateLimited { .. })) => self.judge(A, name, function, Err(e), expect, started),
             // Whatever came back was read from the web site, or is its error: it says
             // nothing of the interface.
             _ if refused => {
                 let detail = "the application interface refused the session token: it is forgotten and not sent again";
                 self.push(A, name, function, Outcome::Failed, detail.to_string(), Some(started));
+                None
+            }
+            // The calls that followed the drop were not sent: the web site answered in their
+            // place, or nothing did. Neither is the read this check is about.
+            _ if dropped => {
+                let detail = "the account was linked again or unlinked while this read ran, and its session token went with it: what came back \
+                              says nothing of the application interface";
+                self.push(A, name, function, Outcome::Skipped, detail.to_string(), Some(started));
                 None
             }
             // The token is still held: the read was left to the web site, which wants the
@@ -334,6 +379,21 @@ impl Runner {
             }
             answer => self.judge(A, name, function, answer, expect, started),
         }
+    }
+
+    /// The application interface asks to wait: the site blocks the address of the process
+    /// (`blocked`), or a call was rate limited. The client hands such a read over to the web
+    /// site, whose answer says nothing of the interface and is not judged. The check is
+    /// failed and the run stops, as it does on a rate limit of the web site: every further
+    /// check would send its calls, and their retries, to an interface that asked for none.
+    fn interface_asks_to_wait(&mut self, name: &str, function: &str, blocked: bool, started: Option<Instant>) {
+        let cause = if blocked { "the site blocks the address of this server" } else { "it rate limited a call" };
+        let detail = format!(
+            "the application interface asks to wait ({cause}): what the web site answers in its place is not judged, and nothing more is sent in \
+             this run"
+        );
+        self.push(INTERFACE, name, function, Outcome::Failed, detail, started);
+        self.stop = Some(format!("run stopped after `{name}`: the application interface asks to wait"));
     }
 
     /// Records the outcome of one read from its answer. Returns the value when the check passed.
@@ -671,6 +731,20 @@ fn interface_record(p: &PerfumeDetails) -> Result<String, String> {
     Ok(format!("{notes} notes, {} ratings, {} classification groups", p.ratings.len(), p.classification.len()))
 }
 
+/// A read of the interface that a page of the web site completes, as the canary judges it.
+/// The tools get the answer with a warning, whatever kept the page from being read. Here a
+/// site that asks to stop (a captcha, a rate limit) or cannot be reached is the error of the
+/// read, as it is for a plain web read: it is no changed structure, and the first two stop
+/// the run. A page that is gone or can no longer be parsed did change: the answer keeps its
+/// warning, which [`unwarned`] reports.
+async fn completed<T>(read: impl Future<Output = Result<Completed<T>, ClientError>>) -> Result<T, ClientError> {
+    let Completed { value, web_error } = read.await?;
+    match web_error {
+        Some(e @ (ClientError::CaptchaRequired | ClientError::RateLimited { .. } | ClientError::Upstream(_))) => Err(e),
+        _ => Ok(value),
+    }
+}
+
 /// A read of the interface that a page of the web site completes says so when the page
 /// could not be read, or when a part of its own is missing.
 fn unwarned(warnings: &[String]) -> Result<(), String> {
@@ -707,8 +781,8 @@ async fn interface_checks(r: &mut Runner, lent: &Lent<'_>, web_p_id: Option<u64>
     r.check_interface(lent, "own nickname", "own_nick", c.own_nick(), None, |n| filled(n, "nickname").map(|()| "found".to_string())).await;
     let query = SearchQuery { text: Some(SEARCH_TEXT.into()), ..SearchQuery::default() };
     r.check_interface(lent, "search", "search_perfumes", c.search_perfumes(&query, 1), None, |l| index_rows(l, "results")).await;
-    let perfume = r.check_interface(lent, "perfume", "get_perfume", c.get_perfume(PERFUME), None, interface_record).await;
-    r.check_interface(lent, "brand", "get_brand", c.get_brand(BRAND, 1), None, |b| {
+    let perfume = r.check_interface(lent, "perfume", "get_perfume", completed(c.get_perfume_completed(PERFUME)), None, interface_record).await;
+    r.check_interface(lent, "brand", "get_brand", completed(c.get_brand_completed(BRAND, 1)), None, |b| {
         filled(&b.brand.name, "brand name")?;
         // The country is read on the web page of the brand: the reader warns when it could not.
         unwarned(&b.warnings)?;
@@ -717,7 +791,7 @@ async fn interface_checks(r: &mut Runner, lent: &Lent<'_>, web_p_id: Option<u64>
     .await;
     match perfume.as_ref().and_then(|p| p.perfumers.first()) {
         Some(perfumer) => {
-            r.check_interface(lent, "perfumer", "get_perfumer", c.get_perfumer(&perfumer.id, 1), None, |b| {
+            r.check_interface(lent, "perfumer", "get_perfumer", completed(c.get_perfumer_completed(&perfumer.id, 1)), None, |b| {
                 filled(&b.perfumer.name, "perfumer name")?;
                 unwarned(&b.warnings)?;
                 index_rows(&b.perfumes, "perfumes")
@@ -786,7 +860,8 @@ fn without_session(link: Result<Option<LinkInfo>, SessionError>) -> (Outcome, St
 }
 
 /// The `interface` area of one run, for the account of `user_id`. Without a token it is one
-/// line, which says why: see [`without_session`].
+/// line, which says why: see [`without_session`], unless the reason is that the interface
+/// asks to wait, which stops the run here as it does at any read of the area.
 async fn interface_area(r: &mut Runner, sessions: &Sessions, user_id: i64, web_p_id: Option<u64>) {
     const A: &str = INTERFACE;
     let (name, function) = APP_SESSION;
@@ -799,8 +874,22 @@ async fn interface_area(r: &mut Runner, sessions: &Sessions, user_id: i64, web_p
         Err(e) => return r.push(A, "client", "ParfumoClient::new", Outcome::Failed, e.to_string(), None),
     };
     let lent = Lent { sessions, user_id, client };
+    // Read before the session is opened: the login made for an account without a token is a
+    // call of the interface, and one answered 429 leaves no other trace.
+    let waits = lent.client.app_waits();
     if !lent.lend().await {
-        let (outcome, detail) = without_session(sessions.link_info(user_id));
+        let link = sessions.link_info(user_id);
+        // Only for an account the sessions log in for: they sent no login because the site
+        // blocks the address, or the login was told to wait. No login failed for a reason the
+        // server log holds, and the pages of the account are not to be asked either. Any
+        // other account asks nothing of the interface, whatever the interface would answer.
+        let logs_in = matches!(&link, Ok(Some(link)) if link.mode == "credentials");
+        let blocked = lent.client.app_blocked();
+        if logs_in && (blocked || lent.client.app_waits() != waits) {
+            r.interface_asks_to_wait(name, function, blocked, None);
+            return;
+        }
+        let (outcome, detail) = without_session(link);
         r.push(A, name, function, outcome, detail, None);
         return;
     }
@@ -1098,6 +1187,27 @@ mod tests {
             assert!(r.checks[1].detail.contains("run stopped after `first`"));
             assert_eq!(r.status(), "inconclusive", "a refusal is not a changed structure");
         }
+    }
+
+    /// What the canary makes of the page that completes a read of the application
+    /// interface: the tools get a warning for all of these.
+    #[tokio::test]
+    async fn a_completing_page_that_asks_to_stop_or_cannot_be_reached_is_the_error_of_the_read() {
+        let read = |web_error| completed(async move { Ok::<_, ClientError>(Completed { value: 1, web_error }) });
+        assert_eq!(read(None).await, Ok(1));
+        for e in [
+            ClientError::CaptchaRequired,
+            ClientError::RateLimited { retry_after_secs: None },
+            ClientError::Upstream("HTTP 503 on /Perfumes/Dior".into()),
+        ] {
+            assert_eq!(read(Some(e.clone())).await, Err(e), "judged as a web read is: failed, and the first two stop the run");
+        }
+        // The page changed: the answer is judged, and its warning says what is missing.
+        for e in [ClientError::NotFound("/Perfumes/Dior".into()), ClientError::ParserOutdated("brand head".into()), ClientError::LoginRequired] {
+            assert_eq!(read(Some(e)).await, Ok(1));
+        }
+        let failed = completed(async { Err::<Completed<u32>, _>(ClientError::NotFound("/perfume_details/1".into())) });
+        assert_eq!(failed.await, Err(ClientError::NotFound("/perfume_details/1".into())), "the error of the interface is its own");
     }
 
     #[tokio::test]

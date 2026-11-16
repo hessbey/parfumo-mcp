@@ -10,7 +10,7 @@ use serde_json::Value;
 
 use crate::{
     ClientError, ParfumoClient, RECORD_TTL,
-    app_db::{count, number, text},
+    app_db::{count, is_bare_number, is_refusal, number, text},
     models::{DupeGroup, SimilarOptions, SimilarPerfume, SimilarPerfumes},
     parse,
     site::routes,
@@ -53,16 +53,25 @@ impl ParfumoClient {
         Some(item)
     }
 
-    /// One list of `GET /similar`: `kind` is `similar` or `layer`.
-    async fn app_similar_list(&self, kind: &str, p_id: u64) -> Result<Vec<SimilarPerfume>, ClientError> {
+    /// One list of `GET /similar`: `kind` is `similar` or `layer`. The inner error is the
+    /// interface having no list to give, by a 404 or by an error object under status 200:
+    /// that says nothing of what the web site knows, and is the error a read with no web
+    /// page behind it reports. Any other failure is the outer error, reported whatever
+    /// the reference.
+    async fn app_similar_list(&self, kind: &str, p_id: u64) -> Result<Result<Vec<SimilarPerfume>, ClientError>, ClientError> {
         let params = [pair("action", "list"), pair("type", kind), pair("p_id", p_id), pair("limit", LIST_LIMIT)];
-        let answer = self.app_get("/similar", &params).await?;
-        let rows = answer
-            .get("perfumes")
-            .and_then(Value::as_array)
-            .filter(|_| text(&answer, "status").as_deref() == Some("success"))
-            .ok_or_else(|| ClientError::ParserOutdated(format!("/app/v1/similar: no list for type={kind}")))?;
-        Ok(rows.iter().filter_map(|row| self.similar_row(row)).collect())
+        let answer = match self.app_get("/similar", &params).await {
+            Ok(answer) => answer,
+            Err(e @ ClientError::NotFound(_)) => return Ok(Err(e)),
+            Err(e) => return Err(e),
+        };
+        let no_list = || ClientError::ParserOutdated(format!("/app/v1/similar: no list for type={kind}"));
+        if is_refusal(&answer) {
+            return Ok(Err(no_list()));
+        }
+        let rows =
+            answer.get("perfumes").and_then(Value::as_array).filter(|_| text(&answer, "status").as_deref() == Some("success")).ok_or_else(no_list)?;
+        Ok(Ok(rows.iter().filter_map(|row| self.similar_row(row)).collect()))
     }
 
     /// The groups of the dupes directory a perfume appears in. The application interface
@@ -76,7 +85,10 @@ impl ParfumoClient {
 
     /// Similar perfumes and layering suggestions through the application interface, the
     /// dupes from the web site. `None` when the reference is not found through the
-    /// interface: the caller then asks the web site, which knows every address.
+    /// interface, or when the interface gives no record or no list for a perfume that has
+    /// its web page (a `Brand/Perfume` reference): the caller then asks the web site, which
+    /// knows every address. A bare number has no web page: what the interface answers
+    /// about it is reported.
     pub(crate) async fn app_similar_perfumes(&self, r: &str, opts: SimilarOptions) -> Result<Option<SimilarPerfumes>, ClientError> {
         let p_id = match self.app_perfume_id(r).await {
             Ok(p_id) => p_id,
@@ -89,11 +101,18 @@ impl ParfumoClient {
         let (perfume_id, name) = match remembered {
             Some(id) => (id, None),
             None => {
-                let record = self.app_get_perfume(&p_id.to_string()).await?;
+                // Read as the record of `get_perfume` is: a number the interface has
+                // nothing under any more is forgotten, and the web page answers.
+                let Some(record) = self.app_perfume_record_under(r, p_id).await? else { return Ok(None) };
                 (record.id, opts.include_dupes.then_some(record.name))
             }
         };
-        let mut similar = self.app_similar_list("similar", p_id).await?;
+        let mut similar = match self.app_similar_list("similar", p_id).await? {
+            Ok(list) => list,
+            // No list to give for a perfume that has its web page: the web site answers.
+            Err(_) if !is_bare_number(r) => return Ok(None),
+            Err(e) => return Err(e),
+        };
         let mut warnings = Vec::new();
 
         // The first rows not met before get their id from their record, one call each.
@@ -117,12 +136,14 @@ impl ParfumoClient {
             match self.app_similar_list("layer", p_id).await {
                 // The same rows with the same votes would mean that the type was ignored:
                 // similar perfumes are not shown as layering suggestions.
-                Ok(list) if !list.is_empty() && said(&list) == said(&similar) => {
+                Ok(Ok(list)) if !list.is_empty() && said(&list) == said(&similar) => {
                     warnings.push("layering suggestions unavailable: the application interface answered the list of similar perfumes".into());
                 }
-                Ok(list) => layering = list,
+                Ok(Ok(list)) => layering = list,
                 Err(e) if crate::app::hands_over(&e) => return Err(e),
-                Err(e) => warnings.push(format!("layering suggestions unavailable: {e}")),
+                // The list of similar perfumes was given: the read is not started over on
+                // the web site for the lack of this one.
+                Ok(Err(e)) | Err(e) => warnings.push(format!("layering suggestions unavailable: {e}")),
             }
         }
 

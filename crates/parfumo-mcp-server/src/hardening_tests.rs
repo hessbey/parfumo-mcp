@@ -167,26 +167,36 @@ async fn a_session_the_site_ended_during_the_canary_is_not_sent_again_after_a_re
         (check.outcome, check.detail.clone())
     };
 
+    let logins = || site.app_logins.load(std::sync::atomic::Ordering::SeqCst);
+
     // The site ends the session: the canary meets the refusal in its interface area, which
-    // is one failed check, and reads the account on the web pages.
+    // is one failed check, and reads the account on the web pages. The login of the
+    // interface is out of order meanwhile: no session is obtained in this run, so nothing
+    // but the canary itself can write to the database what became of the refused token.
     site.app_live.lock().unwrap().clear();
+    site.app_login_unavailable.store(true, std::sync::atomic::Ordering::SeqCst);
     let report = canary::run(&state, Some(&user)).await;
     let (outcome, detail) = nick(&report, "interface");
     assert!(outcome == Outcome::Failed && detail.contains("refused the session token"), "{detail}");
     let (outcome, detail) = nick(&report, "account");
     assert_eq!(outcome, Outcome::Ok, "{detail}");
     assert_eq!(sent("app-alice-1"), 1);
+    assert_eq!(logins(), 2, "the login that linked the account, and one attempt to renew the session");
+    assert!(!state.core.sessions.client_for(user.id).unwrap().has_app_session());
+    assert!(db.link_get(user.id).unwrap().unwrap().app_ended, "the link records that the site ended the session");
 
-    // The server is started again before any tool call of that user: the refused token
-    // does not come back from the database with the cookies. The session obtained after
-    // the refusal does.
+    // The server is started again before any tool call of that user, and the login works
+    // again: the refused token does not come back from the database with the cookies, and
+    // the run reads with a session obtained now.
+    site.app_login_unavailable.store(false, std::sync::atomic::Ordering::SeqCst);
     let report = canary::run(&start(), Some(&user)).await;
+    assert_eq!(sent("app-alice-1"), 1, "the token the site refused to the canary was sent again after the restart");
     for area in ["interface", "account"] {
         let (outcome, detail) = nick(&report, area);
         assert_eq!(outcome, Outcome::Ok, "{area}: {detail}");
     }
-    assert_eq!(sent("app-alice-1"), 1, "the token the site refused to the canary was sent again after the restart");
-    assert_eq!(site.app_logins.load(std::sync::atomic::Ordering::SeqCst), 2, "the session is renewed instead, once");
+    assert_eq!(logins(), 3, "the session is renewed instead, once");
+    assert!(sent("app-alice-3") > 0, "the second run reads with the token of its own login");
 }
 
 #[tokio::test]

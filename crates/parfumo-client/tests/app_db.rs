@@ -54,6 +54,10 @@ struct Site {
     perfumes: Mutex<Option<String>>,
     /// The record a number answers instead of the recorded one.
     records: Mutex<HashMap<u64, String>>,
+    /// The status such a record is answered under, instead of 200.
+    statuses: Mutex<HashMap<u64, u16>>,
+    /// What a page of the web site answers instead of its page: a status and a body, by path.
+    web: Mutex<HashMap<&'static str, (u16, &'static str)>>,
     /// Whether a page of the web site was asked with the session token.
     token_on_web: AtomicBool,
 }
@@ -103,6 +107,9 @@ async fn handler(State(site): State<Arc<Site>>, uri: Uri, headers: HeaderMap, _b
     if !uri.path().starts_with("/app/v1/") {
         site.token_on_web.fetch_or(token.is_some(), Ordering::SeqCst);
         let html = |text: &'static str| (StatusCode::OK, [(header::CONTENT_TYPE, "text/html; charset=utf-8")], text).into_response();
+        if let Some((status, body)) = site.web.lock().unwrap().get(uri.path()).copied() {
+            return (StatusCode::from_u16(status).unwrap(), [(header::CONTENT_TYPE, "text/html; charset=utf-8")], body).into_response();
+        }
         return match uri.path() {
             "/api/alive" => json(r#"{"csrf_key":"fixturecsrfkey00"}"#),
             "/Perfumes/Dior/Sauvage_Eau_de_Toilette" => html(WEB_PERFUME),
@@ -131,7 +138,10 @@ async fn handler(State(site): State<Arc<Site>>, uri: Uri, headers: HeaderMap, _b
         path if path.starts_with("/app/v1/perfume_details/") => {
             let number: u64 = path.trim_start_matches("/app/v1/perfume_details/").parse().unwrap_or_default();
             match site.records.lock().unwrap().get(&number) {
-                Some(answer) => json(answer),
+                Some(answer) => {
+                    let status = site.statuses.lock().unwrap().get(&number).copied().unwrap_or(200);
+                    (StatusCode::from_u16(status).unwrap(), [(header::CONTENT_TYPE, "application/json")], answer.clone()).into_response()
+                }
                 None if number == UNKNOWN => not_found(),
                 None if number == REFUSED => json(r#"{"error":"Perfume not found"}"#),
                 None => json(&record_of(number)),
@@ -604,6 +614,47 @@ async fn a_perfume_named_by_its_id_is_found_through_its_brand_then_remembered() 
     assert!(site.take().is_empty());
 }
 
+/// The rank label is read on the web page of the perfume. When that page cannot be read,
+/// the record of the interface is given all the same and says what it lacks; the error of
+/// the page is handed back as it is to who asks for it, not as the words of the warning.
+#[tokio::test]
+async fn the_error_of_the_page_that_completes_a_record_is_handed_back_beside_the_warning() {
+    let (c, site) = logged_in().await;
+    let page = "/Perfumes/Creed/aventus";
+    let read = c.get_perfume_completed("9438").await.unwrap();
+    assert_eq!(site.take(), ["/app/v1/perfume_details/9438", page]);
+    assert_eq!((read.value.ranking.as_deref(), read.web_error), (Some("Ranked 30 in Men's Perfume"), None), "the page was read");
+    assert!(read.value.warnings.is_empty(), "{:?}", read.value.warnings);
+
+    // A page that does not exist, a rate limit, an outage, and a human verification (the
+    // page of Cloudflare, by its title).
+    let challenge = "<html><head><title>Just a moment...</title></head></html>";
+    for (answer, error) in [
+        ((404, "<html><body>Not found</body></html>"), ClientError::NotFound(page.into())),
+        ((429, ""), ClientError::RateLimited { retry_after_secs: None }),
+        ((503, ""), ClientError::Upstream(format!("HTTP 503 on {page}"))),
+        ((403, challenge), ClientError::CaptchaRequired),
+    ] {
+        site.web.lock().unwrap().insert(page, answer);
+        let read = c.get_perfume_completed("9438").await.unwrap();
+        assert_eq!(read.web_error.as_ref(), Some(&error));
+        assert_eq!((read.value.id.as_str(), read.value.ranking.as_deref()), ("Creed/aventus", None));
+        assert_eq!(read.value.warnings, [format!("ranking unavailable: {error}")]);
+        assert_eq!(c.get_perfume("9438").await.unwrap(), read.value, "the tools get the same record, with the same warning");
+    }
+    // A page that is not the page of a perfume any more is told apart from all of these.
+    site.web.lock().unwrap().insert(page, (200, "<html><body>Another page</body></html>"));
+    let read = c.get_perfume_completed("9438").await.unwrap();
+    assert!(matches!(read.web_error, Some(ClientError::ParserOutdated(_))), "{:?}", read.web_error);
+
+    // A read the interface does not answer has no completing page: the web page is the
+    // read itself, and its failure is the error of the read.
+    let web = c.get_perfume_completed(SAUVAGE).await.unwrap();
+    assert_eq!((web.value.id.as_str(), web.web_error), (SAUVAGE, None));
+    site.web.lock().unwrap().insert("/Perfumes/Dior/Sauvage_Eau_de_Toilette", (403, challenge));
+    assert_eq!(c.get_perfume_completed(SAUVAGE).await.unwrap_err(), ClientError::CaptchaRequired);
+}
+
 #[tokio::test]
 async fn a_perfume_the_lookup_of_the_interface_misses_is_read_from_the_web_site() {
     let (c, site) = logged_in().await;
@@ -718,6 +769,45 @@ async fn a_refusal_that_does_not_say_not_found_is_not_a_perfume_that_does_not_ex
         assert_eq!(site.take(), [format!("/app/v1/perfume_details/{number}"), "/Perfumes/Creed/absolu-aventus".to_string()]);
         assert_eq!(err, ClientError::NotFound("/Perfumes/Creed/absolu-aventus".into()), "the web site answers, and the fake has no such page");
     }
+    assert!(c.has_app_session(), "none of this is a refusal of the session");
+}
+
+#[tokio::test]
+async fn the_words_of_the_interface_reach_an_error_on_one_line_bounded_and_never_with_the_session_token() {
+    let (c, site) = logged_in().await;
+    // Not recorded: what the interface words under status 400 or 422, and an answer that
+    // repeats the session token (`tok` for the fake). Whatever it words ends in an error
+    // message, and from there in the answer of a tool.
+    let refuse = |number: u64, status: u16, message: &str| {
+        site.records.lock().unwrap().insert(number, json!({"status": "error", "message": message}).to_string());
+        site.statuses.lock().unwrap().insert(number, status);
+    };
+    let refused = |number: u64| {
+        let c = c.clone();
+        async move { c.get_perfume(&number.to_string()).await.unwrap_err() }
+    };
+
+    refuse(1, 400, "Invalid perfume");
+    assert_eq!(refused(1).await, ClientError::InvalidInput("Invalid perfume".into()));
+    // On one line, and not a page of them.
+    refuse(2, 422, &format!("Too\n many\tfields {}", "x".repeat(1_000)));
+    let ClientError::InvalidInput(words) = refused(2).await else { panic!("not the refusal of a request") };
+    assert!(words.starts_with("Too many fields x") && words.chars().count() == 200, "{words}");
+    // Words that repeat the token are not passed on, wherever in them it stands.
+    refuse(3, 400, "Invalid session tok");
+    assert_eq!(refused(3).await, ClientError::InvalidInput("refused by /app/v1/perfume_details/3".into()));
+    refuse(4, 422, &format!("{} tok", "x".repeat(400)));
+    assert_eq!(refused(4).await, ClientError::InvalidInput("refused by /app/v1/perfume_details/4".into()));
+
+    // Under status 200 too: a token that stands across the 200th character, where the
+    // words are cut, would leave its first characters in the message.
+    refuse(5, 200, &format!("{} tok is busy", "x".repeat(197)));
+    assert_eq!(refused(5).await, ClientError::Upstream("/app/v1/perfume_details/5 was refused".into()));
+    refuse(6, 200, &format!("{} tok", "x".repeat(400)));
+    assert_eq!(refused(6).await, ClientError::Upstream("/app/v1/perfume_details/6 was refused".into()));
+    // Words without it are passed on, as far as they are kept.
+    refuse(7, 200, &"y".repeat(400));
+    assert_eq!(refused(7).await, ClientError::Upstream(format!("/app/v1/perfume_details/7 was refused: {}", "y".repeat(200))));
     assert!(c.has_app_session(), "none of this is a refusal of the session");
 }
 
