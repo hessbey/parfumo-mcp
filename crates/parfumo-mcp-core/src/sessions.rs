@@ -146,11 +146,24 @@ pub struct Sessions {
     /// is kept in memory for it: the client of an account and the `rev` it belongs to
     /// always change as one. It is taken before any other lock of this struct.
     link_revs: Mutex<HashMap<i64, String>>,
+    /// The `app_rev` of the link of each user, as this process last read the session of the
+    /// application interface from the database or stored it there. Another process on the
+    /// same database may store that session too (the `canary` command run beside the
+    /// server, a second stdio server): the link then carries another `app_rev`, and what it
+    /// stores replaces what is held here. No entry: nothing was read from the link yet.
+    ///
+    /// Read and written with the lock of `link_revs` held.
+    app_revs: Mutex<HashMap<i64, i64>>,
     /// Tests only: run once at the instant a login to the application interface leaves,
     /// after everything that allows it was checked. A link that changes at that very
     /// instant cannot be arranged from outside.
     #[cfg(test)]
     as_the_app_login_leaves: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// Tests only: run once while a session stored by another process is taken, after the
+    /// row was read and before it is decided what becomes of the token held. A login that
+    /// answers at that very instant cannot be arranged from outside.
+    #[cfg(test)]
+    as_the_stored_session_is_taken: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
 fn aad(user_id: i64, kind: &str) -> String {
@@ -175,13 +188,20 @@ impl Sessions {
             app_backoff: Mutex::new(HashMap::new()),
             app_renewed: Mutex::new(HashMap::new()),
             link_revs: Mutex::new(HashMap::new()),
+            app_revs: Mutex::new(HashMap::new()),
             #[cfg(test)]
             as_the_app_login_leaves: Mutex::new(None),
+            #[cfg(test)]
+            as_the_stored_session_is_taken: Mutex::new(None),
         }
     }
 
     fn revs(&self) -> std::sync::MutexGuard<'_, HashMap<i64, String>> {
         self.link_revs.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    fn app_revs(&self) -> std::sync::MutexGuard<'_, HashMap<i64, i64>> {
+        self.app_revs.lock().unwrap_or_else(|p| p.into_inner())
     }
 
     /// What the clients of `user_id` share.
@@ -199,15 +219,21 @@ impl Sessions {
         self.backoff.lock().unwrap_or_else(|p| p.into_inner()).remove(&user_id);
         self.app_backoff.lock().unwrap_or_else(|p| p.into_inner()).remove(&user_id);
         self.app_renewed.lock().unwrap_or_else(|p| p.into_inner()).remove(&user_id);
+        self.app_revs().remove(&user_id);
         self.limiter(user_id).forget_app_session();
     }
 
     /// Reads the link of `user_id` and drops what is kept in memory when it belongs to
     /// another link than the one now stored, or to a link that is gone. Read and compared
     /// as one step, so that a link made meanwhile is not taken for an older one.
+    ///
+    /// The same link may store another session of the application interface than the one
+    /// this process read or stored last: another process stored it. That one is then taken
+    /// in the place of the one held here ([`Self::adopt_app_session`]), and nothing else
+    /// changes.
     fn follow(&self, user_id: i64) -> Result<Option<crate::db::LinkRow>, SessionError> {
         let mut revs = self.revs();
-        let link = self.db.link_get(user_id).map_err(internal)?;
+        let mut link = self.db.link_get(user_id).map_err(internal)?;
         let rev = link.as_ref().map(|l| l.rev.as_str());
         if revs.get(&user_id).map(String::as_str) != rev {
             match rev {
@@ -215,8 +241,98 @@ impl Sessions {
                 None => revs.remove(&user_id),
             };
             self.drop_link_state(user_id);
+        } else if let Some(link) = &mut link {
+            let seen = self.app_revs().get(&user_id).copied();
+            if seen.is_some_and(|seen| seen != link.app_rev)
+                && let Err(e) = self.adopt_app_session(user_id, link, false)
+            {
+                // What is stored could not be taken. The token held may be one the other
+                // process saw refused: it is not kept to be sent in its place.
+                self.limiter(user_id).forget_app_session();
+                return Err(e);
+            }
         }
         Ok(link)
+    }
+
+    fn stored_cookies(&self, user_id: i64, blob: &[u8]) -> Result<Vec<StoredCookie>, SessionError> {
+        let plain = self.key.decrypt(blob, &aad(user_id, "cookies")).map_err(internal)?;
+        serde_json::from_slice(&plain).map_err(internal)
+    }
+
+    /// Makes the session of the application interface held in memory for `user_id` the one
+    /// `link` stores: another process stored it since this one last read or stored the
+    /// session of that link. Only the token changes hands. The web session, the pauses and
+    /// the client of the account stay: the link itself is the same.
+    ///
+    /// - A token is stored: the one held is forgotten, and the stored one restored the way
+    ///   a new process restores it, which does not take a token this process saw the site
+    ///   refuse. Such a token must not stay in the database for the next process either:
+    ///   the refusal is stored in its place (`link` then says so).
+    /// - No token is stored: the site ended the session, as far as the other process knew.
+    ///   The token held is the one it ended, and is forgotten; unless this process obtained
+    ///   it by a login it has not stored yet, which the other process knows nothing of. It
+    ///   is then kept (`true` is returned), and storing it erases nothing. A process that
+    ///   holds no token forgets nothing: a login it has under way keeps its outcome.
+    ///
+    /// A token not stored yet is known by the mark of a change of the session. `mark_taken`
+    /// tells that the caller took that mark away, to store the session: a token is then
+    /// held unsaved whether the mark is found or not.
+    ///
+    /// Called with the lock of `link_revs` held, for the link this process follows.
+    fn adopt_app_session(&self, user_id: i64, link: &mut crate::db::LinkRow, mark_taken: bool) -> Result<bool, SessionError> {
+        let limiter = self.limiter(user_id);
+        let cookies = link.cookies.as_deref().map(|blob| self.stored_cookies(user_id, blob)).transpose()?.unwrap_or_default();
+        // The token is one of the stored cookies, which only a client tells from the others.
+        // One that shares nothing with those of the user has seen no refusal: it holds a
+        // token exactly when one is stored. One on what they share holds what they hold; the
+        // cookies of the web session stored with the token stop there, and go with it.
+        let stored = self.client_on(UserLimiter::new())?;
+        stored.import_cookies(&cookies);
+        let shared = self.client_on(limiter.clone())?;
+        #[cfg(test)]
+        {
+            let hook = self.as_the_stored_session_is_taken.lock().unwrap().take();
+            if let Some(hook) = hook {
+                hook();
+            }
+        }
+        let mut kept = false;
+        if stored.has_app_session() {
+            limiter.forget_app_session();
+            shared.import_cookies(&cookies);
+            if !shared.has_app_session() {
+                stored.forget_app_session();
+                let without = self.encrypt_cookies(user_id, &stored)?;
+                // Not written when yet another session was stored meanwhile: the next look
+                // at the link finds that one under another `app_rev`, and takes it.
+                if self.db.link_store_app_session(user_id, &link.rev, link.app_rev, &without, true).map_err(internal)? {
+                    link.cookies = Some(without);
+                    link.app_ended = true;
+                    link.app_rev += 1;
+                }
+            }
+        } else if shared.has_app_session() {
+            // Whether the token is one not stored yet is asked now that it is seen, not
+            // before the row was read and the clients built: a login under way may answer
+            // at any instant until then, and its token is not the one the other process
+            // saw end. The mark is asked for without being taken away: nothing is stored
+            // here. Nothing else takes it meanwhile (that is done under the lock held).
+            let unsaved = mark_taken || {
+                let marked = limiter.take_app_session_change();
+                if marked {
+                    limiter.flag_app_session_change();
+                }
+                marked
+            };
+            if unsaved {
+                kept = true;
+            } else {
+                limiter.forget_app_session();
+            }
+        }
+        self.app_revs().insert(user_id, link.app_rev);
+        Ok(kept)
     }
 
     /// Whether the link `rev` is still the one this process keeps a session for.
@@ -267,10 +383,12 @@ impl Sessions {
         }
         let client = self.new_client(user_id)?;
         let link = self.db.link_get(user_id).map_err(internal)?.filter(|link| revs.get(&user_id) == Some(&link.rev));
-        if let Some(blob) = link.and_then(|link| link.cookies) {
-            let plain = self.key.decrypt(&blob, &aad(user_id, "cookies")).map_err(internal)?;
-            let cookies: Vec<StoredCookie> = serde_json::from_slice(&plain).map_err(internal)?;
-            client.import_cookies(&cookies);
+        if let Some(link) = link {
+            if let Some(blob) = &link.cookies {
+                client.import_cookies(&self.stored_cookies(user_id, blob)?);
+            }
+            // What the link stores of the application interface is now what is held here.
+            self.app_revs().insert(user_id, link.app_rev);
         }
         self.clients.lock().unwrap_or_else(|p| p.into_inner()).insert(user_id, client.clone());
         Ok(client)
@@ -361,10 +479,12 @@ impl Sessions {
         self.drop_link_state(user_id);
         let cookies = client.map(|client| self.encrypt_cookies(user_id, client)).transpose()?;
         let rev = self.db.link_put(user_id, mode, secret, cookies.as_deref(), status).map_err(internal)?;
+        // A new link starts with no session of the application interface stored: `app_rev` 0.
         if logged_in_now {
-            self.db.link_update_session(user_id, &rev, cookies.as_deref(), status, true).map_err(internal)?;
+            self.db.link_update_session(user_id, &rev, 0, cookies.as_deref(), status, true).map_err(internal)?;
         }
         revs.insert(user_id, rev.clone());
+        self.app_revs().insert(user_id, 0);
         if let Some(client) = client {
             self.clients.lock().unwrap_or_else(|p| p.into_inner()).insert(user_id, client.clone());
         }
@@ -437,6 +557,11 @@ impl Sessions {
         }
         match client.is_logged_in().await {
             Ok(true) => {
+                // The probe waited for its turn and for the site. Another process may have
+                // stored the refusal of the token held here, or a renewed one, meanwhile:
+                // the link is read again, so that the tool does not send a token whose
+                // refusal is already in the database.
+                self.follow(user_id)?;
                 if app_login_possible(&link) {
                     self.ensure_app_session(user_id, &client, &link.rev).await;
                 }
@@ -450,7 +575,7 @@ impl Sessions {
             Err(e) => return Err(SessionError::Internal(e.to_string())),
         }
         let Some(secret) = link.secret.filter(|_| link.mode == "credentials") else {
-            self.db.link_update_session(user_id, &link.rev, link.cookies.as_deref(), STATUS_EXPIRED, false).map_err(internal)?;
+            self.db.link_update_session(user_id, &link.rev, link.app_rev, link.cookies.as_deref(), STATUS_EXPIRED, false).map_err(internal)?;
             return Err(SessionError::ReauthRequired);
         };
         let plain = self.key.decrypt(&secret, &aad(user_id, "credentials")).map_err(internal)?;
@@ -462,16 +587,15 @@ impl Sessions {
         // What is stored is what the client now holds, whatever the outcome: no web session
         // after a failure, and the session token of the application interface, untouched.
         // Written for the link the login was made for, never into the row of a newer one.
-        let cookies = self.encrypt_cookies(user_id, &client)?;
         match outcome {
             Ok(_) => {
-                self.db.link_update_session(user_id, &link.rev, Some(&cookies), STATUS_LINKED, true).map_err(internal)?;
+                self.store_web_session(user_id, &link.rev, &client, STATUS_LINKED, true)?;
                 self.ensure_app_session(user_id, &client, &link.rev).await;
                 Ok(client)
             }
             // The credentials themselves were refused: stop for good.
             Err((e, true)) => {
-                self.db.link_update_session(user_id, &link.rev, Some(&cookies), STATUS_REAUTH, false).map_err(internal)?;
+                self.store_web_session(user_id, &link.rev, &client, STATUS_REAUTH, false)?;
                 Err(e)
             }
             // A captcha or an outage: the credentials may still be good. Wait before any
@@ -479,12 +603,35 @@ impl Sessions {
             Err((e, false)) => {
                 let status = if e == SessionError::CaptchaRequired { STATUS_CAPTCHA } else { STATUS_LOGIN_FAILED };
                 // Nothing is held against a newer link for what the previous one met.
-                if self.db.link_update_session(user_id, &link.rev, Some(&cookies), status, false).map_err(internal)? {
+                if self.store_web_session(user_id, &link.rev, &client, status, false)? {
                     self.back_off(user_id, &e);
                 }
                 Err(e)
             }
         }
+    }
+
+    /// Stores the outcome of a login to the web site for the link `rev`: its status, and
+    /// the cookies `client` holds after it. `false`, and nothing written, when the link is
+    /// no longer the user's.
+    ///
+    /// The token of the application interface is stored with those cookies, and the login
+    /// took its time: another process may have stored another session meanwhile. The token
+    /// written is the one the link stores, never the one that was held when the login began.
+    fn store_web_session(&self, user_id: i64, rev: &str, client: &ParfumoClient, status: &str, logged_in_now: bool) -> Result<bool, SessionError> {
+        // What this process has to say of the session of the application interface is
+        // stored as such first, where the other processes see it.
+        self.store_app_session(user_id);
+        // The stored session is taken if it changed, and the cookies are written over that
+        // one only. A try fails when it changes once more between the two.
+        for _ in 0..3 {
+            let Some(link) = self.follow(user_id)?.filter(|link| link.rev == rev) else { return Ok(false) };
+            let cookies = self.encrypt_cookies(user_id, client)?;
+            if self.db.link_update_session(user_id, rev, link.app_rev, Some(&cookies), status, logged_in_now).map_err(internal)? {
+                return Ok(true);
+            }
+        }
+        Err(internal("the stored session kept changing: the outcome of the login to the web site was not stored"))
     }
 }
 
@@ -499,6 +646,17 @@ impl Drop for StoreAppSession<'_> {
     fn drop(&mut self) {
         self.sessions.store_app_session(self.user_id);
     }
+}
+
+/// What is left of [`LOGIN_BACKOFF`] after a renewal made `here`, by this process, that long
+/// ago, and one `recorded` on the link that long ago. The latest one counts: a renewal of
+/// this process does not hide a later one, made by a process running beside it.
+fn renewal_pause_left(here: Option<Duration>, recorded: Option<Duration>) -> Option<Duration> {
+    let since = match (here, recorded) {
+        (Some(here), Some(recorded)) => here.min(recorded),
+        (here, recorded) => here.or(recorded)?,
+    };
+    LOGIN_BACKOFF.checked_sub(since).filter(|left| !left.is_zero())
 }
 
 /// Whether a link, as it was last read, may log in to the application interface at all:
@@ -520,13 +678,13 @@ impl Sessions {
 
     /// What is left of [`LOGIN_BACKOFF`] since the session of the application interface of
     /// `user_id` was last renewed, when it was renewed that recently: by this process, or
-    /// else by an earlier one, as `link` records it.
+    /// by another one, earlier or running beside it, as `link` records it.
     fn app_renewed_recently(&self, user_id: i64, link: &crate::db::LinkRow) -> Option<Duration> {
         let here = self.app_renewed.lock().unwrap_or_else(|p| p.into_inner()).get(&user_id).map(|at| at.elapsed());
-        // The time of an earlier process is that of the clock. One that lies in the future
+        // The time of another process is that of the clock. One that lies in the future
         // (the clock was set back since) tells nothing, and holds nothing up.
-        let recorded = || link.app_renewed_at.and_then(|at| u64::try_from(crate::db::now() - at).ok()).map(Duration::from_secs);
-        LOGIN_BACKOFF.checked_sub(here.or_else(recorded)?).filter(|left| !left.is_zero())
+        let recorded = link.app_renewed_at.and_then(|at| u64::try_from(crate::db::now() - at).ok()).map(Duration::from_secs);
+        renewal_pause_left(here, recorded)
     }
 
     /// Credentials mode: logs in to the application interface when the user holds no
@@ -557,7 +715,12 @@ impl Sessions {
         if client.has_app_session() || self.app_paused(user_id) || client.app_blocked() || self.backing_off(user_id).is_some() {
             return;
         }
-        let Ok(Some(link)) = self.db.link_get(user_id) else { return };
+        // The link is read again, and with it the session it stores: another process may
+        // have obtained one since the caller looked. That one is used, and no login made.
+        let Ok(Some(link)) = self.follow(user_id) else { return };
+        if client.has_app_session() {
+            return;
+        }
         // Whether the link is still the user's, and where the session of the user stands,
         // are read as one step, under the lock a link is replaced or erased under. A link
         // that changes after this instant drops the session, and the login below, decided
@@ -604,6 +767,10 @@ impl Sessions {
         }
         match outcome {
             Ok(()) => {
+                // The session first, then that it was renewed: a process that reads the
+                // link between the two finds the new token. The other way round it would
+                // find a renewal and no token, which reads as a renewed session lost at once.
+                self.store_app_session(user_id);
                 if renewal {
                     self.app_renewed.lock().unwrap_or_else(|p| p.into_inner()).insert(user_id, now);
                     if let Err(e) = self.db.link_set_app_renewed(user_id, rev, Some(crate::db::now())) {
@@ -611,7 +778,6 @@ impl Sessions {
                         tracing::warn!(error = %e, "the renewal of the session of the application interface could not be recorded");
                     }
                 }
-                self.store_app_session(user_id);
             }
             Err(ClientError::InvalidCredentials) => {
                 tracing::warn!("the application interface refused the credentials: the web pages are used until the account is linked again");
@@ -652,20 +818,49 @@ impl Sessions {
     /// it was last stored: a token the site refused must not come back from the database
     /// after a restart, and a token just obtained must be found there. Written for the link
     /// this process follows, and only if it is still the user's link.
+    ///
+    /// Written over the session this process last read or stored, and no other. When
+    /// another process stored one since, that one is taken instead
+    /// ([`Self::adopt_app_session`]): a token it just obtained is not erased by what this
+    /// process knew before. Two things are still stored after it: the refusal of the very
+    /// token the link stores, and a token this process obtained when the link stores none.
     pub fn store_app_session(&self, user_id: i64) {
         let limiter = self.limiter(user_id);
+        // Under the lock of the links: the client and the `rev` are those of one link, and
+        // the mark is not taken away while the link is followed, which asks for it too.
+        let revs = self.revs();
         if !limiter.take_app_session_change() {
             return;
         }
-        // Under the lock of the links: the client and the `rev` are those of one link.
-        let revs = self.revs();
         let account = self.clients.lock().unwrap_or_else(|p| p.into_inner()).get(&user_id).cloned();
         let (Some(rev), Some(account)) = (revs.get(&user_id), account) else { return };
+        let seen = self.app_revs().get(&user_id).copied();
         // With the token goes what became of it: a session the site ended is one the next
         // process must know it renews, not obtains for the first time.
-        let stored = self
-            .encrypt_cookies(user_id, &account)
-            .and_then(|cookies| self.db.link_store_app_session(user_id, rev, &cookies, account.app_session_ended()).map_err(internal));
+        let write = |over: i64| -> Result<bool, SessionError> {
+            let cookies = self.encrypt_cookies(user_id, &account)?;
+            let written = self.db.link_store_app_session(user_id, rev, over, &cookies, account.app_session_ended()).map_err(internal)?;
+            if written {
+                self.app_revs().insert(user_id, over + 1);
+            }
+            Ok(written)
+        };
+        let stored = (|| {
+            if let Some(seen) = seen
+                && write(seen)?
+            {
+                return Ok(());
+            }
+            // Nothing was written. Either the link is no longer the user's, and nothing is
+            // to be; or another process stored a session since this one last looked.
+            let Some(mut link) = self.db.link_get(user_id).map_err(internal)?.filter(|link| link.rev == *rev) else { return Ok(()) };
+            // The mark was taken above: a token held by now, or obtained while the stored
+            // session is taken, is one this process has not stored.
+            if self.adopt_app_session(user_id, &mut link, true)? && !write(link.app_rev)? {
+                return Err(internal("the stored session changed again"));
+            }
+            Ok(())
+        })();
         if let Err(e) = stored {
             tracing::warn!(error = %e, "the session of the application interface could not be stored");
             // Tried again when the next call ends.
@@ -685,6 +880,13 @@ impl Sessions {
     #[cfg(test)]
     pub(crate) fn as_the_app_login_leaves(&self, hook: impl FnOnce() + Send + 'static) {
         *self.as_the_app_login_leaves.lock().unwrap() = Some(Box::new(hook));
+    }
+
+    /// What `hook` does happens the next time a session stored by another process is taken:
+    /// after the row was read, before it is decided what becomes of the token held.
+    #[cfg(test)]
+    pub(crate) fn as_the_stored_session_is_taken(&self, hook: impl FnOnce() + Send + 'static) {
+        *self.as_the_stored_session_is_taken.lock().unwrap() = Some(Box::new(hook));
     }
 
     /// Ends the pauses of the login to the application interface: the one that follows a
@@ -857,6 +1059,20 @@ mod tests {
         let m = Mock::new(vec![Err(ClientError::CaptchaRequired)]);
         assert_eq!(login_with_retries(&m, &creds(), Duration::ZERO).await, Err(SessionError::CaptchaRequired));
         assert_eq!(m.calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn the_latest_renewal_counts_whichever_process_made_it() {
+        let minutes = |m: u64| Some(Duration::from_secs(m * 60));
+        // A renewal this process made long ago does not hide the one another process
+        // recorded since: the pause runs from the latest of the two.
+        assert_eq!(renewal_pause_left(minutes(20), minutes(2)), minutes(13));
+        assert_eq!(renewal_pause_left(minutes(2), minutes(20)), minutes(13));
+        assert_eq!(renewal_pause_left(minutes(2), None), minutes(13));
+        assert_eq!(renewal_pause_left(None, minutes(14)), minutes(1));
+        // No renewal, or none within the pause: nothing is left of it.
+        assert_eq!(renewal_pause_left(None, None), None);
+        assert_eq!(renewal_pause_left(minutes(15), minutes(40)), None);
     }
 
     #[test]
