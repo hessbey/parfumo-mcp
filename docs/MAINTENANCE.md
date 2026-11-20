@@ -305,7 +305,7 @@ curl https://<votre-domaine>/healthz
 ```
 
 Le serveur utilise l'image publiée `ghcr.io/hessbey/parfumo-mcp-server`. Sans réglage, c'est
-la dernière version ; `PARFUMO_MCP_VERSION=0.3.0` dans `.env` en fige une, et la mise à jour
+la dernière version ; `PARFUMO_MCP_VERSION=0.3.1` dans `.env` en fige une, et la mise à jour
 consiste alors à changer ce numéro avant les commandes ci-dessus. Pour une image construite
 soi-même, voir [HOSTING.md](HOSTING.md#install).
 
@@ -332,7 +332,7 @@ autorisation : le client légitime doit alors se reconnecter. C'est voulu.
 sort pas du réseau Docker.
 
 **Surveillance.** `GET /healthz` répond 200 tant que la base répond, et donne le dernier
-verdict du canari : `{"canary":{"at":…,"status":"ok"},"status":"ok","version":"0.3.0"}`. Le
+verdict du canari : `{"canary":{"at":…,"status":"ok"},"status":"ok","version":"0.3.1"}`. Le
 verdict du canari ne fait jamais échouer le contrôle de santé : un conteneur ne doit pas
 redémarrer parce que Parfumo a changé une page.
 
@@ -347,8 +347,8 @@ Une version se publie en poussant un tag. Le reste est automatique
 2. Poser le tag du même numéro, précédé de `v`, et le pousser :
 
    ```sh
-   git tag v0.3.0
-   git push origin v0.3.0
+   git tag v0.3.1
+   git push origin v0.3.1
    ```
 
    Le tag doit correspondre exactement à la version de `Cargo.toml`, sinon la publication
@@ -371,12 +371,16 @@ Une version se publie en poussant un tag. Le reste est automatique
      d'échec, rien d'autre n'est bloqué : corriger, puis « Re-run failed jobs ». Le numéro de
      version de `server.json` est remplacé par celui du tag au moment de l'inscription.
 
-Un tag de pré-version (`v0.3.0-rc.1`) crée une pré-version et ne déplace pas `latest` ; sur
+Un tag de pré-version (`v0.3.1-rc.1`) crée une pré-version et ne déplace pas `latest` ; sur
 npm, il est publié sous l'étiquette `next`.
 
 **Version 0.3.0.** Le tag `v0.2.3` n'a jamais été posé. Le tag `v0.3.0` est donc la première
 version publiée qui porte les deux changements : celui de la 0.2.3 (aucune page n'est
 conservée, chaque lecture interroge Parfumo) et l'interface de l'application.
+
+**Version 0.3.1.** Le programme est celui de la 0.3.0. Ce qui change est la publication :
+npm ne publie plus la copie `@hessbey/parfumo-mcp`, la publication npm se fait d'abord sans
+jeton, et le serveur est inscrit pour la première fois au registre officiel MCP.
 
 **npm.** La publication sur npm vient en dernier, après la page de version : si elle échoue,
 le reste est déjà en ligne. Corriger la cause, puis « Re-run failed jobs » sur l'exécution :
