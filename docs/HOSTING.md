@@ -34,14 +34,14 @@ docker compose run --rm --no-deps server keygen
 
 # 3. Start
 docker compose up -d
-curl https://<your-domain>/healthz        # {"canary":null,"status":"ok","version":"0.3.0"}
+curl https://<your-domain>/healthz        # {"canary":null,"status":"ok","version":"0.3.1"}
 ```
 
 Nothing is compiled on the server: Compose downloads the published image,
 `ghcr.io/hessbey/parfumo-mcp-server`, built for amd64 and arm64.
 
 - **Version.** Without a setting, the latest release runs. To pin one, add
-  `PARFUMO_MCP_VERSION=0.3.0` to `.env`: an upgrade then only happens when you change it.
+  `PARFUMO_MCP_VERSION=0.3.1` to `.env`: an upgrade then only happens when you change it.
 - **Upgrade.** `docker compose pull`, then `docker compose up -d`. From 0.2.x to 0.3.0
   nothing else is needed: the database is upgraded in place at start (four columns are
   added to the table `parfumo_links`), there is no new setting, and accounts stay linked.
