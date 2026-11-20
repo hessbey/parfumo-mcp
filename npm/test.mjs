@@ -37,6 +37,12 @@ try {
       Object.entries(manifest.optionalDependencies).every(([name, v]) => name.startsWith(`${SCOPE}/`) && v === version),
     "the main package names the program of every system, at the same version"
   );
+  // The MCP registry checks that the npm package names the server it lists.
+  const server = JSON.parse(readFileSync(join(root, "server.json"), "utf8"));
+  check(
+    manifest.mcpName === server.name && server.packages.some((p) => p.registryType === "npm" && p.identifier === manifest.name),
+    `parfumo-mcp names the server ${server.name} of server.json, which lists it`
+  );
 
   // Paths given to npm are relative: the temporary directory may hold a space.
   const pack = (dir) => npm(["pack", "--loglevel=error", "--pack-destination", "../.."], dir).trim().split("\n").pop();

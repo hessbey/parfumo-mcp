@@ -362,7 +362,14 @@ Une version se publie en poussant un tag. Le reste est automatique
    - publie le binaire local sur npm : le paquet `parfumo-mcp`, que lance
      `npx -y parfumo-mcp`, et un paquet par système qui contient le binaire
      (`@hessbey/parfumo-mcp-linux-x64`, `-linux-arm64`, `-darwin-arm64`, `-darwin-x64`,
-     `-win32-x64`).
+     `-win32-x64`) ;
+   - inscrit la version au registre officiel MCP (registry.modelcontextprotocol.io), sous le
+     nom `io.github.hessbey/parfumo-mcp`, d'après le fichier `server.json` à la racine du
+     dépôt. Le registre vérifie que le paquet npm de cette version porte ce nom (champ
+     `mcpName` de `npm/parfumo-mcp/package.json`) : cette étape vient donc après npm. La
+     connexion se fait par GitHub, sans secret. Une pré-version n'y est pas inscrite. En cas
+     d'échec, rien d'autre n'est bloqué : corriger, puis « Re-run failed jobs ». Le numéro de
+     version de `server.json` est remplacé par celui du tag au moment de l'inscription.
 
 Un tag de pré-version (`v0.3.0-rc.1`) crée une pré-version et ne déplace pas `latest` ; sur
 npm, il est publié sous l'étiquette `next`.
