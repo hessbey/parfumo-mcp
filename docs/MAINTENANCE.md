@@ -370,6 +370,9 @@ Une version se publie en poussant un tag. Le reste est automatique
      connexion se fait par GitHub, sans secret. Une pré-version n'y est pas inscrite. En cas
      d'échec, rien d'autre n'est bloqué : corriger, puis « Re-run failed jobs ». Le numéro de
      version de `server.json` est remplacé par celui du tag au moment de l'inscription.
+     L'étape attend d'abord, dix minutes au plus, que npm montre la nouvelle version : npm
+     met quelques minutes à la rendre visible, et le registre refuse une version qu'il ne
+     voit pas encore.
 
 Un tag de pré-version (`v0.3.1-rc.1`) crée une pré-version et ne déplace pas `latest` ; sur
 npm, il est publié sous l'étiquette `next`.
@@ -384,21 +387,23 @@ jeton, et le serveur est inscrit pour la première fois au registre officiel MCP
 
 **npm.** La publication sur npm vient en dernier, après la page de version : si elle échoue,
 le reste est déjà en ligne. Corriger la cause, puis « Re-run failed jobs » sur l'exécution :
-les paquets déjà publiés sont sautés. Elle s'authentifie de deux façons, dans cet ordre :
+les paquets déjà publiés sont sautés.
 
-- **Sans jeton** (publication de confiance) : npm vérifie que la demande vient bien du
-  fichier `release.yml` de ce dépôt. Aucun secret, rien à renouveler. Il faut pour cela que
-  **chacun des six paquets** désigne ce dépôt comme éditeur de confiance : sur npmjs.com,
-  page du paquet → Settings → « Trusted Publisher » → GitHub Actions, avec l'utilisateur
-  `hessbey`, le dépôt `parfumo-mcp`, le fichier `release.yml`, aucun environnement, et
-  `npm publish` coché dans « Allowed actions » (pas `npm stage publish`, qui attendrait une
-  approbation à la main sur npmjs.com pour chaque paquet de chaque version).
-- **Avec un jeton**, en secours, si la première façon échoue et que le secret `NPM_TOKEN`
-  existe dans le dépôt (Settings → Secrets and variables → Actions). L'exécution affiche
-  alors un avertissement. C'est aussi la seule façon de publier un paquet qui n'existe pas
-  encore sur npm. Le jeton se crée sur npmjs.com (Access Tokens → Generate New Token) :
-  droits « Read and write » sur tous les paquets, option « Bypass two-factor
-  authentication » cochée. npm limite sa durée à 90 jours.
+Elle se fait **sans jeton** (publication de confiance) : npm vérifie que la demande vient
+bien du fichier `release.yml` de ce dépôt. Aucun secret, rien à renouveler. Il faut pour
+cela que **chacun des six paquets** désigne ce dépôt comme éditeur de confiance : sur
+npmjs.com, page du paquet → Settings → « Trusted Publisher » → GitHub Actions, avec
+l'utilisateur `hessbey`, le dépôt `parfumo-mcp`, le fichier `release.yml`, aucun
+environnement, et `npm publish` coché dans « Allowed actions » (pas `npm stage publish`,
+qui attendrait une approbation à la main sur npmjs.com pour chaque paquet de chaque
+version). Sans ce réglage, npm répond `ENEEDAUTH` ; avec `npm publish` décoché, il répond
+`403 … OIDC permission denied for this action`. Publiée ainsi depuis la version 0.3.1 ; le
+secret `NPM_TOKEN` de secours a été retiré du dépôt.
+
+Un éditeur de confiance ne se règle que sur un paquet qui existe déjà. Pour ajouter un
+paquet (un nouveau système, par exemple), le publier une première fois à la main depuis un
+ordinateur connecté à npm (`npm publish --access public` dans son dossier construit par
+`npm/build.mjs`), puis régler son éditeur de confiance comme ci-dessus.
 
 Les six paquets : `parfumo-mcp`, et `@hessbey/parfumo-mcp-linux-x64`, `-linux-arm64`,
 `-darwin-arm64`, `-darwin-x64`, `-win32-x64`.
