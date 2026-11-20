@@ -4,8 +4,7 @@
 // The packages of the systems, which nobody types, live under the npm account of the
 // project (`@hessbey/…`): npm refused the plain name `parfumo-mcp-win32-x64` as spam, and
 // names under an account are not checked that way. The main package keeps the plain name
-// `parfumo-mcp`; a copy of it is built as `@hessbey/parfumo-mcp`, to fall back on should
-// npm refuse the plain name too.
+// `parfumo-mcp`, which npm accepted.
 //
 //   node npm/build.mjs --version 0.2.1 --out npm-dist --binary <target>=<file> [...] [--all]
 //
@@ -37,7 +36,7 @@ const root = dirname(here);
 
 /**
  * Writes the packages into `out` and returns their directories: those of the systems, then
- * the main one (`parfumo-mcp`), then its copy under the account (`scoped`).
+ * the main one (`parfumo-mcp`).
  */
 export function build({ version, out, binaries, all = false }) {
   if (!/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(version)) throw new Error(`not a version: ${version}`);
@@ -88,12 +87,6 @@ export function build({ version, out, binaries, all = false }) {
   main.optionalDependencies = Object.fromEntries(Object.keys(TARGETS).map((target) => [packageName(target), version]));
   writeFileSync(join(dir, "package.json"), JSON.stringify(main, null, 2) + "\n");
   dirs.push(dir);
-
-  // The same package under the account.
-  const scoped = join(out, "scoped");
-  cpSync(dir, scoped, { recursive: true });
-  writeFileSync(join(scoped, "package.json"), JSON.stringify({ ...main, name: `${SCOPE}/parfumo-mcp` }, null, 2) + "\n");
-  dirs.push(scoped);
   return dirs;
 }
 
