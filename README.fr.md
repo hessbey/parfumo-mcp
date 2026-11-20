@@ -6,8 +6,8 @@
 [![licence : MIT](https://img.shields.io/badge/licence-MIT-blue.svg)](LICENSE)
 ![rust 1.90+](https://img.shields.io/badge/rust-1.90%2B-orange.svg)
 
-Un serveur [Model Context Protocol](https://modelcontextprotocol.io), écrit en Rust, qui
-donne à un assistant IA un accès à [Parfumo](https://www.parfumo.com) : la base de données
+**Serveur MCP pour Parfumo** (Parfumo MCP server) : un serveur
+[Model Context Protocol](https://modelcontextprotocol.io), écrit en Rust, qui donne à un assistant IA un accès à [Parfumo](https://www.parfumo.com) : la base de données
 des parfums, votre collection, vos ports, vos notes et avis, et la partie communautaire
 (messages, forum, blogs, Souk).
 

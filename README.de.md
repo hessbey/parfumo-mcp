@@ -9,8 +9,8 @@ geprüft. Im Zweifel gilt die [englische Fassung](README.md).</sub>
 [![Lizenz: MIT](https://img.shields.io/badge/Lizenz-MIT-blue.svg)](LICENSE)
 ![rust 1.90+](https://img.shields.io/badge/rust-1.90%2B-orange.svg)
 
-Ein in Rust geschriebener [Model-Context-Protocol](https://modelcontextprotocol.io)-Server,
-der einem KI-Assistenten Zugriff auf [Parfumo](https://www.parfumo.com) gibt: auf die
+**MCP-Server für Parfumo** (Parfumo MCP server): ein in Rust geschriebener
+[Model-Context-Protocol](https://modelcontextprotocol.io)-Server, der einem KI-Assistenten Zugriff auf [Parfumo](https://www.parfumo.com) gibt: auf die
 Parfumdatenbank, deine Sammlung, deine getragenen Düfte, deine Bewertungen und Rezensionen sowie
 auf die Community (Nachrichten, Forum, Blogs, Souk).
 

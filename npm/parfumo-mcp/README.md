@@ -1,6 +1,6 @@
 # parfumo-mcp
 
-Unofficial [MCP](https://modelcontextprotocol.io) server for [Parfumo](https://www.parfumo.com):
+Parfumo MCP server: an unofficial [MCP](https://modelcontextprotocol.io) server for [Parfumo](https://www.parfumo.com):
 48 tools over the fragrance database, your collection, wear log, ratings, reviews and the
 community, for AI assistants. Not affiliated with Parfumo.
 
