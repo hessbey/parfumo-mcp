@@ -21,10 +21,7 @@ publish() {
   npm publish "./$dir" --access public --tag "$tag"
 }
 
-# `scoped` is the copy of the main package under the account: it goes out before the plain
-# name, so that `npx @hessbey/parfumo-mcp` works even if npm's spam filter refuses
-# `parfumo-mcp`, as it refused `parfumo-mcp-win32-x64`. Such a refusal fails the job: the
-# documentation promises the plain name.
-for dir in "$dist"/parfumo-mcp-* "$dist"/scoped "$dist"/parfumo-mcp; do
+# The main package goes out last: it names the packages of the systems, which must exist first.
+for dir in "$dist"/parfumo-mcp-* "$dist"/parfumo-mcp; do
   publish "$dir"
 done

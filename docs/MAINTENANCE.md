@@ -377,9 +377,11 @@ les paquets déjà publiés sont sautés. Elle s'authentifie de deux façons, da
 
 - **Sans jeton** (publication de confiance) : npm vérifie que la demande vient bien du
   fichier `release.yml` de ce dépôt. Aucun secret, rien à renouveler. Il faut pour cela que
-  **chacun des sept paquets** désigne ce dépôt comme éditeur de confiance : sur npmjs.com,
+  **chacun des six paquets** désigne ce dépôt comme éditeur de confiance : sur npmjs.com,
   page du paquet → Settings → « Trusted Publisher » → GitHub Actions, avec l'utilisateur
-  `hessbey`, le dépôt `parfumo-mcp`, le fichier `release.yml`, et aucun environnement.
+  `hessbey`, le dépôt `parfumo-mcp`, le fichier `release.yml`, aucun environnement, et
+  `npm publish` coché dans « Allowed actions » (pas `npm stage publish`, qui attendrait une
+  approbation à la main sur npmjs.com pour chaque paquet de chaque version).
 - **Avec un jeton**, en secours, si la première façon échoue et que le secret `NPM_TOKEN`
   existe dans le dépôt (Settings → Secrets and variables → Actions). L'exécution affiche
   alors un avertissement. C'est aussi la seule façon de publier un paquet qui n'existe pas
@@ -387,8 +389,8 @@ les paquets déjà publiés sont sautés. Elle s'authentifie de deux façons, da
   droits « Read and write » sur tous les paquets, option « Bypass two-factor
   authentication » cochée. npm limite sa durée à 90 jours.
 
-Les sept paquets : `parfumo-mcp`, `@hessbey/parfumo-mcp`, et `@hessbey/parfumo-mcp-linux-x64`,
-`-linux-arm64`, `-darwin-arm64`, `-darwin-x64`, `-win32-x64`.
+Les six paquets : `parfumo-mcp`, et `@hessbey/parfumo-mcp-linux-x64`, `-linux-arm64`,
+`-darwin-arm64`, `-darwin-x64`, `-win32-x64`.
 
 **Noms des paquets.** Le paquet principal garde le nom nu `parfumo-mcp`. Les paquets des
 systèmes, que personne ne tape, sont publiés sous le compte npm du projet (`@hessbey/…`) : à
@@ -397,10 +399,9 @@ macOS puis refusé `parfumo-mcp-win32-x64` (« Package name triggered spam detec
 bien que le paquet principal n'est jamais sorti. Ces quatre paquets orphelins de la 0.2.1 ont
 été supprimés de npm le jour même.
 
-Une copie du paquet principal est publiée sous le nom `@hessbey/parfumo-mcp`, juste avant
-lui. Si npm refusait aussi le nom nu, l'étape échouerait, mais `npx -y @hessbey/parfumo-mcp`
-fonctionnerait : il resterait à écrire au support de npm pour débloquer le nom, ou à changer
-la commande dans la documentation.
+Jusqu'à la version 0.3.0, une copie du paquet principal était aussi publiée sous le nom
+`@hessbey/parfumo-mcp`, au cas où npm refuserait le nom nu. npm l'a accepté à chaque
+version : la copie n'est plus publiée depuis. Ses versions déjà publiées restent sur npm.
 
 Les paquets se construisent avec `npm/build.mjs` et se vérifient sans rien publier avec
 `node npm/test.mjs target/release/parfumo-mcp`, ce que fait l'intégration continue sur les
